@@ -236,6 +236,40 @@ const UNREACHED: &[(&str, &str)] = &[
          the shim — thorough, and one crate away from here",
     ),
     (
+        // `scene.js` and `vector.js` arrived together with the drawing
+        // vocabulary, and neither has a suite in this crate. Named here
+        // rather than given one, because what would exercise them is a
+        // canvas: `scene.js` asks for a WebGPU context, falls back to WebGL
+        // and then to Canvas 2D, and `dom-shim.js` models none of the
+        // three. A suite here could only check that the module parses.
+        "runtime/scene.js",
+        "driven from `zdc-codegen/tests/element_parity.rs`, which compiles a \
+         `Scene` and holds the emitted shape to the element table; the \
+         renderer itself needs a browser, and `zdc-cli/tests/browser.rs` is \
+         where one is",
+    ),
+    (
+        // Both became visible to this gate the moment `MODULES` learned
+        // about them — which is what that list being checked rather than
+        // remembered buys: a module nothing runs used to be invisible here
+        // too.
+        "runtime/viewport.js",
+        "driven from `zdc-codegen/tests/clock.rs`, which compiles a program \
+         reading `from scroll` and drives the hoisted cell through the shim",
+    ),
+    (
+        "runtime/prerender.js",
+        "not shipped to a browser at all: it is the build host's own DOM \
+         walk, run by `zdc-codegen`'s `prerender.rs` on every example with a \
+         first paint, and `clock.rs` reads the painted document back out",
+    ),
+    (
+        "runtime/vector.js",
+        "linked only by a program the maths prelude reaches, and exercised \
+         through it: `zdc-codegen/tests/library.rs` runs `dot`, `magnitude` \
+         and the rest as compiled programs and reads the answers back out",
+    ),
+    (
         "runtime/request.js",
         "driven from `zdc-codegen/tests/outbound.rs`, through a compiled \
          program rather than a suite of its own",
@@ -451,6 +485,25 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
 /// sequences only ever appear inside comments and strings here, and every
 /// byte of one is replaced by a space, so the result is ASCII where it is
 /// blanked and byte-identical where it is not.
+/// Whether a `/` at the end of `written` opens a regular expression.
+///
+/// The bookkeeping is here and the *decision* is `minify::starts_a_regex`,
+/// which is the only place in this workspace that knows the answer.
+fn starts_a_regex_here(written: &[u8]) -> bool {
+    let mut k = written.len();
+    while k > 0 && written[k - 1].is_ascii_whitespace() {
+        k -= 1;
+    }
+    let previous = if k == 0 { 0 } else { written[k - 1] };
+    let before = if k <= 1 { 0 } else { written[k - 2] };
+    let mut start = k;
+    while start > 0 && (written[start - 1].is_ascii_alphanumeric() || written[start - 1] == b'_') {
+        start -= 1;
+    }
+    let word = std::str::from_utf8(&written[start..k]).unwrap_or_default();
+    zdc_runtime::minify::starts_a_regex(previous, before, word)
+}
+
 fn masked(source: &str) -> String {
     let bytes = source.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -487,6 +540,31 @@ fn masked(source: &str) -> String {
                 out.push(if byte == b'\n' { b'\n' } else { b' ' });
                 i += 1;
                 if byte == c {
+                    break;
+                }
+            }
+        } else if c == b'/' && starts_a_regex_here(&out) {
+            // A regex literal is text, the same as a string is: a mutant
+            // placed inside `/[^\\]+/` changes the pattern rather than the
+            // code, and the harness would be reporting on a character class.
+            // The rule for telling one from a division is `minify`'s, shared
+            // rather than copied — a second one that disagreed would be
+            // wrong exactly where this is careful.
+            out.push(b' ');
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    out.push(b' ');
+                    out.push(b' ');
+                    i += 2;
+                    continue;
+                }
+                let byte = bytes[i];
+                // A `[` … `]` may hold an unescaped `/`, so the class has
+                // to be tracked or the literal ends early.
+                out.push(if byte == b'\n' { b'\n' } else { b' ' });
+                i += 1;
+                if byte == b'/' {
                     break;
                 }
             }
