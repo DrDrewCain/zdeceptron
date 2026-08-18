@@ -10,6 +10,28 @@
 // entrypoint at all: WinterTC's own `proposal-http-server-api` repository is
 // empty. So the module that calls `route`, and the store it hands in, differ
 // per target. Those two files are the entire per-target surface.
+//
+// # Why nothing here calls `JSON.stringify`
+//
+// `JSON.stringify(new Map(...))` is `{}` — no throw, no warning — which is
+// the whole reason `runtime/wire.js` exists (#204). This file wrote
+// `JSON.stringify` for every answer it sent, so a deployment was a second
+// definition of the wire format and the definition it gave was "whatever
+// `JSON.stringify` does".
+//
+// It was not a corner case. The emitted read of a durable map is
+// `(await $store.get('held')) ?? new Map()`, so a map nobody has written
+// yet is a real `Map` in the handler's hands: `zdc dev` answered
+// `{"$map":[]}` and the deployment answered `{}`, which the browser rebuilt
+// as an empty *record*. Every deployment starts in that state, and `zdc
+// dev` — where the program was tested — never showed it.
+//
+// So the encoder is imported rather than re-spelled, and it is the same
+// file `rpc.js` imports in the browser and `zdc-host` evaluates for `zdc
+// dev`. Three users, one definition, which is the property that file's
+// header claims and this one has to stop breaking.
+
+import { stringify } from './wire.js';
 
 // The wire format this server reads and writes (#144). A third spelling
 // of `runtime/wire.js`'s `VERSION`, unavoidably: this file is copied
@@ -37,9 +59,20 @@ const PREFIX = '/_zd/';
 const LIVE = 'live';
 const POLL = 'poll';
 
-/** A JSON response. The wire format `runtime/rpc.js` expects. */
+/**
+ * A response in the wire format `runtime/rpc.js` decodes.
+ *
+ * `stringify` and never `JSON.stringify`, for every body this file sends —
+ * including the `{ error }` refusals, which are not ZD values but ride the
+ * same encoder so that this file has exactly one way of writing JSON and
+ * cannot grow a second by accident.
+ *
+ * It also absorbs the `undefined` guard that used to be written here:
+ * `encode` turns `undefined` into `null` at every depth, where
+ * `JSON.stringify` drops the field it was under.
+ */
 export function json(value, status = 200) {
-  return new Response(JSON.stringify(value === undefined ? null : value), {
+  return new Response(stringify(value), {
     status,
     headers: JSON_HEADERS,
   });
@@ -79,6 +112,7 @@ export async function route(request, endpoints, store, env, config) {
   if (endpoint === undefined) return json({ error: `no endpoint named ${name}` }, 404);
   if (request.method !== 'POST') return json({ error: 'an endpoint takes POST' }, 405);
 
+<<<<<<< HEAD
   // Before the body is read, not after: a body written by a format this
   // server does not speak is not a body worth parsing, and parsing it
   // first is how "the arguments decoded to something else" becomes a 500
@@ -86,6 +120,19 @@ export async function route(request, endpoints, store, env, config) {
   const refused = refuseVersion(request.headers.get(WIRE_HEADER), name);
   if (refused) return refused;
 
+=======
+  // Read, not decoded — deliberately, and this is the one place the two
+  // differ. `zdc-host` hands the body to `JSON.parse` and gives the handler
+  // what comes out (see its driver's `$zdArgs`), so decoding here would make
+  // a deployed handler see a `Map` where `zdc dev` gave it `{"$map":[…]}`:
+  // the divergence this file was fixed to remove, pointing the other way.
+  //
+  // It is also load-bearing further down. A command's argument goes straight
+  // to `$store.set`, and every adapter store writes a cell with
+  // `JSON.stringify` — so a decoded `Map` would reach the store as `{}` and
+  // #204 would be back, one layer lower. Both sides move together or
+  // neither does.
+>>>>>>> 3ff05f5 (Answer a deployed endpoint in the wire format the client decodes)
   let args;
   try {
     args = await request.json();
@@ -182,7 +229,7 @@ export function watch(request, url, store, config) {
 
       const close = (reason) => {
         if (!open) return;
-        send(`event: close\ndata: ${JSON.stringify({ reason })}\n\n`);
+        send(`event: close\ndata: ${stringify({ reason })}\n\n`);
         open = false;
         if (heartbeat !== null) clearInterval(heartbeat);
         if (typeof stop === 'function') stop();
@@ -197,9 +244,14 @@ export function watch(request, url, store, config) {
       // wire format, not this file's: `receive` dispatches on the event
       // name and reads the cursor out of the payload, falling back to
       // `Last-Event-ID`. Both are sent so either path resumes.
+      //
+      // The whole payload goes through `stringify` rather than only
+      // `value`, because `encode` recurses and `key` and `seq` are a string
+      // and a number — one call, and no second place deciding which parts
+      // of a frame are encoded.
       const emit = (key, value) => {
         latest = Date.now();
-        const payload = JSON.stringify({ key, value, seq: latest });
+        const payload = stringify({ key, value, seq: latest });
         send(`id: ${latest}\nevent: update\ndata: ${payload}\n\n`);
       };
 
@@ -212,7 +264,7 @@ export function watch(request, url, store, config) {
       try {
         for (const key of keys) emit(key, await store.get(key));
       } catch (error) {
-        send(`event: error\ndata: ${JSON.stringify({ error: message(error) })}\n\n`);
+        send(`event: error\ndata: ${stringify({ error: message(error) })}\n\n`);
       }
 
       if (typeof store.watch === 'function') {
@@ -304,7 +356,12 @@ function poll(store, keys, emit, seconds) {
     try {
       for (const key of keys) {
         const value = await store.get(key);
-        const encoded = JSON.stringify(value === undefined ? null : value);
+        // The same encoder the frame is sent with, so "changed" means what
+        // the client would see change. `JSON.stringify` writes every `Map`
+        // as `{}`, so a store that hands one back — Deno KV structured-
+        // clones them — would compare equal to itself for ever and the
+        // stream would go silent without failing.
+        const encoded = stringify(value);
         if (seen.has(key) && seen.get(key) === encoded) continue;
         const first = !seen.has(key);
         seen.set(key, encoded);
