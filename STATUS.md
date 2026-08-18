@@ -207,9 +207,10 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
-the total had grown from about 1,546 to 2,661. The rows below sum to 2,746
-today, four of which are the `zdc-diagnostics` tests #148 added — a figure
-worth re-adding rather than carrying, since every merge moves it.
+the total had grown from about 1,546 to 2,661. The per-crate rows below are gated against the tree, so their sum is the
+workspace total and can be re-added at any time. It is deliberately not
+written out here: it moved by fifty-three in the four merges it took to
+land this branch, and a total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
