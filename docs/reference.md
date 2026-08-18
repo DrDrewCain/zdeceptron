@@ -1556,10 +1556,96 @@ label is "load"`, `Row padding is 8`. Nesting is indentation.
 
 A component is called the same way, which is the point.
 
-The element vocabulary is the widest thing in the language and is documented
-per element in [the standard library
-pages](https://zdeceptron.marksturman.com/docs/standard-library); the
-argument for its size and shape is issue #241.
+The argument for the vocabulary's size and shape is issue #241; [the standard
+library pages](https://zdeceptron.marksturman.com/docs/standard-library) carry
+the per-element prose.
+
+**The whole vocabulary is below, because a closed vocabulary makes an
+unlisted element unreachable rather than merely undocumented.** An unknown
+element name is refused, not passed through to HTML, so a reader cannot find
+one by trying it and cannot fall back on knowing HTML. The table is generated
+from the compiler's own element table — the one the emitter reads — so it
+cannot fall behind it, and a new element that is not here fails the build.
+
+*Leading argument* is the positional one written first, and **two-way** means
+writing it binds a signal the reader can change. *Children* is whether
+elements may be nested under it. *Required* names arguments that must be
+written, which are refusals rather than defaults: an `Image` with no `alt` is
+a diagnostic.
+
+<!-- generated: the element vocabulary -->
+
+| Element | HTML | Leading argument | Children | Required |
+|---|---|---|---|---|
+| `Column` | `div` | text, or omit it and use children | yes | — |
+| `Row` | `div` | text, or omit it and use children | yes | — |
+| `Main` | `main` | — | yes | — |
+| `Section` | `section` | — | yes | — |
+| `Article` | `article` | — | yes | — |
+| `Aside` | `aside` | — | yes | — |
+| `Navigation` | `nav` | — | yes | — |
+| `Header` | `header` | — | yes | — |
+| `Footer` | `footer` | — | yes | — |
+| `Address` | `address` | — | yes | — |
+| `Divider` | `hr` | — | no | — |
+| `Text` | `span` | text | no | — |
+| `Heading` | `h1`–`h6` | text | no | — |
+| `Paragraph` | `p` | text, or omit it and use children | yes | — |
+| `Emphasis` | `em` | text | no | — |
+| `Strong` | `strong` | text | no | — |
+| `Code` | `code` | text | no | — |
+| `CodeBlock` | `pre` | text, or omit it and use children | yes | — |
+| `Preformatted` | `pre` | text, or omit it and use children | yes | — |
+| `Break` | `br` | — | no | — |
+| `Quote` | `blockquote` | — | yes | — |
+| `Key` | `kbd` | text | no | — |
+| `Time` | `time` | text | no | — |
+| `Small` | `small` | text | no | — |
+| `Mark` | `mark` | text | no | — |
+| `Abbreviation` | `abbr` | text | no | `expansion` |
+| `Superscript` | `sup` | text | no | — |
+| `Subscript` | `sub` | text | no | — |
+| `Prose` | `div` | `Markup`, used as the whole content | no | — |
+| `List` | `ul` | — | yes | — |
+| `NumberedList` | `ol` | — | yes | — |
+| `Item` | `li` | text, or omit it and use children | yes | — |
+| `Terms` | `dl` | — | yes | — |
+| `Term` | `dt` | text | no | — |
+| `Description` | `dd` | text, or omit it and use children | yes | — |
+| `Table` | `table` | — | yes | — |
+| `HeaderRow` | `tr` | — | yes | — |
+| `TableRow` | `tr` | — | yes | — |
+| `HeaderCell` | `th` | text | no | — |
+| `Cell` | `td` | text, or omit it and use children | yes | — |
+| `Link` | `a` | where it goes: a `route` value or a URL | yes | — |
+| `Image` | `img` | — | no | `source`, `alt` |
+| `Video` | `video` | — | no | `source` |
+| `Audio` | `audio` | — | no | `source` |
+| `Frame` | `iframe` | — | no | `source`, `title` |
+| `Figure` | `figure` | — | yes | — |
+| `Caption` | `figcaption` | text, or omit it and use children | yes | — |
+| `Canvas` | `canvas` | — | no | — |
+| `Button` | `button` | text | yes | — |
+| `Form` | `form` | — | yes | — |
+| `Input` | `input` | the text it edits, two-way | no | — |
+| `TextArea` | `textarea` | the text it edits, two-way | no | — |
+| `PasswordInput` | `input` | the text it edits, two-way | no | — |
+| `NumberInput` | `input` | the number it edits, two-way, `Option` | no | — |
+| `DateInput` | `input` | the number it edits, two-way, `Option` | no | — |
+| `Slider` | `input` | the number it edits, two-way | no | `least`, `most` |
+| `Select` | `select` | the `choice` variant it edits, two-way | no | — |
+| `Radio` | `input` | the signal every radio in the group shares | no | `option`, `label` |
+| `Checkbox` | `input` | whether it is checked, two-way | no | — |
+| `Label` | `label` | text | no | `controls` |
+| `Fieldset` | `fieldset` | — | yes | — |
+| `Legend` | `legend` | text | no | — |
+| `Details` | `details` | — | yes | — |
+| `Summary` | `summary` | text | no | — |
+| `Spinner` | `span` | — | no | — |
+| `Progress` | `progress` | the number it draws, read only | no | — |
+| `Meter` | `meter` | the number it draws, read only | no | — |
+| `ErrorBar` | `div` | — | no | `message` |
+<!-- end generated -->
 
 **Accessibility is what the vocabulary is closed for.** Some of it is a
 refusal: an `Image` must be given `alt`, a `Frame` a `title`, a `Radio`, a
