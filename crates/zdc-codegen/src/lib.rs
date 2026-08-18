@@ -59,6 +59,7 @@ mod pages;
 #[cfg(feature = "evaluate")]
 mod prerender;
 mod server;
+pub mod sourcemap;
 mod stmt;
 mod style;
 mod styles;
@@ -106,6 +107,16 @@ pub use zdc_runtime::Mode;
 // the same rules or the two halves of one bundle disagree about what
 // JavaScript is.
 pub use zdc_runtime::minify;
+
+/// The map beside `client.js`, which is the file an unrouted bundle's
+/// module is written as (#6).
+///
+/// Named once here rather than spelled at the three sites that need it:
+/// the trailer inside the file, the `PageBundle` field the writer reads,
+/// and the tests. A map whose name in the comment differs from its name on
+/// disk fails silently — devtools asks for the file, gets a 404, and shows
+/// the generated source exactly as it did before.
+pub const CLIENT_MAP: &str = "client.js.map";
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -269,6 +280,21 @@ pub struct Bundle {
     /// sources to write; nothing outside that set is shipped (§16.3.1).
     pub runtime: BTreeSet<&'static str>,
     pub client_js: String,
+    /// Where each statement of `client_js` came from (#6).
+    ///
+    /// Data, not a document: turning these into a `.map` needs the source
+    /// text and the names to call the files by, and `compile` reads no
+    /// file. The caller holds both — `zdc-resolve`'s `Linked` is exactly
+    /// that table — and calls [`sourcemap::render`], which is the same
+    /// division `stylesheets` and `statics` already use.
+    ///
+    /// `client_js` already ends with the `//# sourceMappingURL=client.js.map`
+    /// line these are for, so a build that ignores this field ships a
+    /// bundle naming a map that is not there. That is deliberate: the
+    /// comment is 35 bytes the size gates measure, and a comment that
+    /// appeared only when someone remembered to write the map is a comment
+    /// no benchmark measures.
+    pub mappings: Vec<sourcemap::Mapping>,
     pub styles_css: String,
     /// Where [`styles_css`](Bundle::styles_css) goes relative to the
     /// bundle root, with a content hash in the name: `styles.<hash>.css`
@@ -380,9 +406,32 @@ impl Bundle {
     /// not a file anyone edits by hand. `zdc dev` still serves the header,
     /// and so does every emission test, which is where a person actually
     /// reads generated code.
+    /// # The map does not survive it, and says so rather than lying
+    ///
+    /// Minifying reflows the text: a blank line becomes nothing, a run of
+    /// them becomes one newline, and leading indentation is dropped. Every
+    /// line and column in [`mappings`](Bundle::mappings) describes the
+    /// emitted text, so after minification each one names a position that
+    /// has moved.
+    ///
+    /// A map that points at the wrong line is worse than no map: a
+    /// debugger follows it in silence and shows the reader a line that had
+    /// nothing to do with the frame. So a minified bundle carries neither
+    /// the mappings nor the `//#` trailer that would send a browser
+    /// looking for them.
+    ///
+    /// **The better answer is a relabelling, and it is not written yet.**
+    /// The minifier never joins or reorders tokens, so every mapping has a
+    /// new position rather than no position — recovering it needs the
+    /// minifier to report where each token went, which is a change to
+    /// `minify.rs` rather than a change here. Until then `zdc dev` serves
+    /// the unminified emission with its map, which is where a person
+    /// debugs.
     pub fn minified(self) -> Bundle {
+        let client_js = minify::javascript(&self.client_js);
         Bundle {
-            client_js: minify::javascript(&self.client_js),
+            client_js: sourcemap::without_trailer(&client_js),
+            mappings: Vec::new(),
             styles_css: minify::css(&self.styles_css),
             boot_js: self.boot_js.as_deref().map(minify::javascript),
             ..self
@@ -477,6 +526,18 @@ pub struct PageBundle {
     /// A file-name-safe name for its module and stylesheet.
     pub slug: String,
     pub client_js: String,
+    /// Where each statement of `client_js` came from (#6). Same contract
+    /// as [`Bundle::mappings`].
+    pub mappings: Vec<sourcemap::Mapping>,
+    /// The `.map` this page's `client_js` names, relative to wherever the
+    /// module itself is written.
+    ///
+    /// Carried rather than derived by the writer, so the comment in the
+    /// file and the file beside it cannot disagree. They are named from
+    /// different facts otherwise: this crate knows the page's slug and the
+    /// writer knows whether the site was routed, and a program with one
+    /// routed page would have had them answer differently.
+    pub map_name: String,
     pub styles_css: String,
     /// Where [`styles_css`](PageBundle::styles_css) goes relative to the
     /// bundle root, with a content hash in the name (#137):
@@ -620,7 +681,8 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     let styles_path = hash::hashed_name("styles.css", emitted.styles_css.as_bytes());
     Ok(Bundle {
         runtime: emitted.runtime,
-        client_js: emitted.client_js,
+        client_js: emitted.client_js + &sourcemap::trailer(CLIENT_MAP),
+        mappings: emitted.mappings,
         index_html: nodes.is_some().then(|| {
             index_html(
                 &metadata,
@@ -698,6 +760,11 @@ pub fn compile_site(
                 url: "/".to_string(),
                 slug: "index".to_string(),
                 client_js: bundle.client_js,
+                mappings: bundle.mappings,
+                // `compile` already appended the trailer naming it, so
+                // this restates that decision rather than making a second
+                // one.
+                map_name: CLIENT_MAP.to_string(),
                 styles_css: bundle.styles_css,
                 styles_path: bundle.styles_path,
                 document_html: bundle.index_html,
@@ -795,11 +862,18 @@ pub fn compile_site(
                     slug: page.slug.clone(),
                     styles_path: styles_path.clone(),
                 });
+                // Relative to the module, which sits in `pages/` beside
+                // it — so the browser resolves `<slug>.js.map` against
+                // `/pages/<slug>.js` and lands on the file the writer put
+                // there.
+                let map_name = format!("{}.js.map", page.slug);
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
                     slug: page.slug.clone(),
-                    client_js: emitted.client_js,
+                    client_js: emitted.client_js + &sourcemap::trailer(&map_name),
+                    mappings: emitted.mappings,
+                    map_name,
                     styles_css: emitted.styles_css,
                     document_html: Some(index_html(
                         &metadata,
@@ -917,6 +991,10 @@ impl Layout {
 
 struct Emitted {
     client_js: String,
+    /// Where each emitted statement came from (#6), against `client_js`
+    /// before the `//# sourceMappingURL` trailer is appended — which is
+    /// the last line, so it shifts nothing this indexes.
+    mappings: Vec<sourcemap::Mapping>,
     /// The `foreign` modules `client_js` imports by relative path (#223).
     linked_modules: BTreeSet<LinkedModule>,
     /// Bare specifier to the target the project mapped it to, for the
@@ -1095,8 +1173,24 @@ fn emit(
         nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles, page_url).region(nodes));
 
     let is_module = region.is_none();
-    let functions = emit_functions(&mut emitter, &client_members, is_module);
-    let declarations = emit_declarations(&mut emitter, &client_members, is_module);
+    // Offsets into `functions` and `declarations`, rebased onto `client_js`
+    // where each is spliced in below (#6). Two vectors rather than one
+    // because the two fragments are written in the opposite order to the
+    // one they are emitted in.
+    let mut function_marks: Vec<sourcemap::Mark> = Vec::new();
+    let mut declaration_marks: Vec<sourcemap::Mark> = Vec::new();
+    let functions = emit_functions(
+        &mut emitter,
+        &client_members,
+        is_module,
+        &mut function_marks,
+    );
+    let declarations = emit_declarations(
+        &mut emitter,
+        &client_members,
+        is_module,
+        &mut declaration_marks,
+    );
     let remotes = emit_remotes(&mut emitter);
 
     // The server roots, emitted last so every diagnostic from the client
@@ -1438,12 +1532,15 @@ fn emit(
             client_js.push_str(source);
         }
     }
+    let mut marks: Vec<sourcemap::Mark> = Vec::new();
     if !functions.is_empty() {
         client_js.push('\n');
+        marks.extend(sourcemap::rebase(&function_marks, client_js.len()));
         client_js.push_str(&functions);
     }
     if !declarations.is_empty() {
         client_js.push('\n');
+        marks.extend(sourcemap::rebase(&declaration_marks, client_js.len()));
         client_js.push_str(&declarations);
     }
     if !remotes.is_empty() {
@@ -1455,7 +1552,13 @@ fn emit(
         client_js.push_str("}\n");
     }
 
+    // Byte offsets become generated line and column here, where the file
+    // is finished and nothing more can shift them. The trailer the caller
+    // appends is the last line, so it moves nothing.
+    let mappings = sourcemap::positions(&client_js, &marks);
+
     Ok(Emitted {
+        mappings,
         client_js,
         linked_modules,
         import_map,
@@ -1880,6 +1983,7 @@ fn emit_declarations(
     emitter: &mut Emitter,
     client_members: &BTreeSet<DefId>,
     exported: bool,
+    marks: &mut Vec<sourcemap::Mark>,
 ) -> String {
     let export = if exported { "export " } else { "" };
     let mut out = String::new();
@@ -1894,6 +1998,9 @@ fn emit_declarations(
     // binding in this file already goes: `emit_remote_bindings` writes
     // `$remote(…)` after this function's output for the same reason.
     let mut requests = String::new();
+    // Marks into `requests`, which is appended whole below, so they rebase
+    // once rather than being interleaved with `out`'s.
+    let mut request_marks: Vec<sourcemap::Mark> = Vec::new();
     let ids: Vec<_> = emitter
         .hir
         .defs
@@ -1911,6 +2018,16 @@ fn emit_declarations(
         let clock = signal.clock;
         let name = emitter.names.def(id).to_string();
         let setter = emitter.names.setter(id).map(str::to_string);
+        // One mark per declaration, at the `const` it becomes (#6). A
+        // `derived`'s body is a closure on this same line, so a frame
+        // inside one resolves to the `derived` the reader wrote — which is
+        // the whole of what a stack trace through a reactive graph can be
+        // told without the expression emitter carrying offsets.
+        //
+        // `None` for a prelude declaration: §17.4.1's library shares these
+        // arenas and not this file's span space, so a mark from one would
+        // point at an arbitrary byte of the user's source.
+        let mark = declared_by_the_program(emitter.hir, id).then(|| emitter.hir.defs[id].span);
 
         // One `const`, and no callback anywhere in the emission. The
         // resting value is not emitted at all: `clock.js` holds it, because
@@ -1939,6 +2056,7 @@ fn emit_declarations(
                 continue;
             }
             let call = clock_call(&mut emitter.used, clock);
+            marks.extend(mark.map(|span| (out.len(), span)));
             out.push_str(&format!("{export}const {name} = {call};\n"));
             continue;
         }
@@ -1972,6 +2090,7 @@ fn emit_declarations(
                     format!("signal({value})")
                 }
             };
+            marks.extend(mark.map(|span| (out.len(), span)));
             match setter {
                 // `HirPlace.base` is a `Res`, so whether a signal is ever
                 // written is exactly decidable — a never-written one needs
@@ -1990,17 +2109,35 @@ fn emit_declarations(
             // getter, exactly as `$remote` does — so wrapping it in
             // `derived` would allocate a fresh request cell on every
             // recomputation, and the page would fetch for ever.
+            request_marks.extend(mark.map(|span| (requests.len(), span)));
             requests.push_str(&format!("{export}const {name} = {value};\n"));
         } else {
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
             emitter.used.signal.insert("derived");
             let body = js::arrow_body(&value);
+            marks.extend(mark.map(|span| (out.len(), span)));
             out.push_str(&format!("{export}const {name} = derived(() => {body});\n"));
         }
     }
+    marks.extend(sourcemap::rebase(&request_marks, out.len()));
     out.push_str(&requests);
     out
+}
+
+/// Whether `def` was written in the program rather than in the prelude.
+///
+/// §17.4.1 resolves the library into the same arenas as the program, which
+/// is what makes a reference to `valueOr` an ordinary `Res::Def` and saves
+/// every later pass a rule for it. The one thing that does *not* carry
+/// over is the span space: a prelude declaration's span indexes the
+/// prelude's own source file. So this is the gate on recording a source
+/// map mark — without it, a program that calls `valueOr` gets a mapping
+/// pointing at whatever byte of the user's file the library happened to
+/// sit at (#6).
+fn declared_by_the_program(hir: &Hir, def: DefId) -> bool {
+    use zdc_hir::ArenaId;
+    def.index() >= hir.prelude_defs
 }
 
 /// A definition's placement, for the one emission decision that turns on
@@ -2028,6 +2165,7 @@ fn emit_functions(
     emitter: &mut Emitter,
     client_members: &BTreeSet<DefId>,
     exported: bool,
+    marks: &mut Vec<sourcemap::Mark>,
 ) -> String {
     let export = if exported { "export " } else { "" };
     let mut out = String::new();
@@ -2090,7 +2228,7 @@ fn emit_functions(
         let stepped = bounce.is_some();
 
         let mut statements = String::new();
-        Statements {
+        let mut block = Statements {
             emitter,
             temporaries: 0,
             awaited: false,
@@ -2100,12 +2238,15 @@ fn emit_functions(
             unbounded: false,
             tail,
             bounce,
-        }
-        .block(body, indent, &mut statements);
+            marks: Vec::new(),
+        };
+        block.block(body, indent, &mut statements);
+        let body_marks = std::mem::take(&mut block.marks);
 
         // The member keeps its name for the wrapper, so every call site
         // in the program goes on naming what it always named, and the
         // body moves into the step the trampoline drives.
+        let header = out.len();
         if stepped {
             let step = crate::tailgroup::step_name(&name);
             out.push_str(&format!(
@@ -2120,6 +2261,15 @@ fn emit_functions(
         }
         if indent == 4 {
             out.push_str("  $tail: while (true) {\n");
+        }
+        // The declaration's own line, and then the body's, rebased onto
+        // where the body actually landed (#6). Prelude declarations are
+        // skipped: §17.4.1 resolves the library into these same arenas,
+        // but its spans index the library's sources, so a mark from one
+        // would point at an arbitrary byte of the user's file.
+        if declared_by_the_program(emitter.hir, id) {
+            marks.push((header, emitter.hir.defs[id].span));
+            marks.extend(sourcemap::rebase(&body_marks, out.len()));
         }
         out.push_str(&statements);
         if indent == 4 {

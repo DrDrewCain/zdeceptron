@@ -13,13 +13,17 @@ use support::{
 };
 
 /// §16.4's worked emission for `hello.zd`, verbatim except for the heading
-/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
-/// heading's level is now its nesting depth, and this one is not nested,
-/// so it is `<h1>`. That is the only difference from the worked emission,
-/// and it is the whole point of the change: a document whose outline
-/// starts at level two is the commonest automated accessibility failure
-/// there is, and it was previously the only outline this language could
-/// produce.
+/// tag, and the trailer. §16.4 writes `<h2>`, because `Heading` was fixed
+/// at `h2`; a heading's level is now its nesting depth, and this one is not
+/// nested, so it is `<h1>`. A document whose outline starts at level two is
+/// the commonest automated accessibility failure there is, and it was
+/// previously the only outline this language could produce.
+///
+/// The `//# sourceMappingURL` line is the second difference and postdates
+/// §16.4 entirely (#6). It is pinned here rather than trimmed off before
+/// comparing, because this constant is the one place that says what a
+/// bundle *is* byte for byte — a comparison that quietly ignored the last
+/// line would stop noticing if it ever named the wrong file.
 const HELLO: &str = r#"// zdc 0.1.1 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
@@ -39,16 +43,21 @@ export function main(container) {
   bindText($n2.firstChild, name);
   return $r;
 }
+//# sourceMappingURL=client.js.map
 "#;
 
 /// §16.4's worked emission for `counter.zd`, verbatim except for the heading
-/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
-/// heading's level is now its nesting depth, and this one is not nested,
-/// so it is `<h1>`. That is the only difference from the worked emission,
-/// and it is the whole point of the change: a document whose outline
-/// starts at level two is the commonest automated accessibility failure
-/// there is, and it was previously the only outline this language could
-/// produce.
+/// tag, and the trailer. §16.4 writes `<h2>`, because `Heading` was fixed
+/// at `h2`; a heading's level is now its nesting depth, and this one is not
+/// nested, so it is `<h1>`. A document whose outline starts at level two is
+/// the commonest automated accessibility failure there is, and it was
+/// previously the only outline this language could produce.
+///
+/// The `//# sourceMappingURL` line is the second difference and postdates
+/// §16.4 entirely (#6). It is pinned here rather than trimmed off before
+/// comparing, because this constant is the one place that says what a
+/// bundle *is* byte for byte — a comparison that quietly ignored the last
+/// line would stop noticing if it ever named the wrong file.
 const COUNTER: &str = r#"// zdc 0.1.1 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
@@ -74,6 +83,7 @@ export function main(container) {
   on($n5, 'click', () => setCount(0));
   return $r;
 }
+//# sourceMappingURL=client.js.map
 "#;
 
 #[test]
@@ -1385,10 +1395,16 @@ fn every_logging_call_in_the_shipped_runtime_is_named_here() {
         scanned >= 13,
         "the emitter can ship thirteen runtime modules; this read {scanned}"
     );
+    // `scene.js` is the fourth, and the ruling this list asks for: its one
+    // `console.warn` says the declared renderer is unavailable and which
+    // one is drawing instead. What it interpolates is the *program's own
+    // word* — `"webgpu"`, `"webgl"`, `"auto"` — and a fixed alternative,
+    // so nothing a program computed and nothing a visitor typed reaches
+    // it. That is the property this list is checking, and it holds.
     assert_eq!(
         logging,
-        ["dom.js", "keys.js", "rpc.js"],
-        "the shipped runtime's logging calls are these three, each reaching the visitor's own \
+        ["dom.js", "keys.js", "rpc.js", "scene.js"],
+        "the shipped runtime's logging calls are these four, each reaching the visitor's own \
          browser. A module joining the list is a new place a value is copied to, and it has to \
          be ruled on rather than added here"
     );

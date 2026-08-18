@@ -86,6 +86,11 @@ fn content_type(path: &str) -> &'static str {
         Some("js") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
+        // A source map is JSON, and devtools will not read one served as
+        // an octet stream — which is what the default arm below would have
+        // made of it, silently, leaving `client.js` naming a map the
+        // browser fetched and then ignored (#6).
+        Some("map") => "application/json; charset=utf-8",
         // §14C.3b's generated files. A `static` signal names its own
         // output path, so these extensions arrive from the program rather
         // than from the compiler: `rss.xml` served as an octet stream is

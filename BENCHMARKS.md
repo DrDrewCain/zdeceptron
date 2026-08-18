@@ -488,7 +488,7 @@ build fails if they disagree, so neither can be fast by being wrong.
 
 **What it cost in bytes.** About 2,900, and paying for them is why `runtime/list.js` exists —
 see the size gate at the bottom of this file, which had five bytes of headroom before this
-change and has 4,460 after it.
+change and has about 2,250 today.
 
 ### Components inline, and the bill is linear (§16.10, #209)
 
@@ -795,7 +795,7 @@ removing what a reader never read. **That last one bought no room for the next f
 comments are gone once, and the file that gets longer next still gets longer. The gate below is
 2×.
 
-The smallest program the compiler will accept at all — a `view` and one `Text` — emits **232
+The smallest program the compiler will accept at all — a `view` and one `Text` — emits **267
 bytes**. The program's name is part of that: the emitter writes it into `client.js`, so the
 same file measured under two spellings differs by the difference in their lengths. Everything
 above is named by repository-relative path, the same way the bundle-size table is.
@@ -806,17 +806,17 @@ above is named by repository-relative path, the same way the bundle-size table i
 
 | signals | code lines | `client.js` | bytes/line | ratio to previous |
 |---|---|---|---|---|
-| 8 | 18 | 1,138 | 63 | — |
-| 16 | 34 | 1,984 | 58 | 1.74 |
-| 32 | 66 | 3,696 | 56 | 1.86 |
-| 64 | 130 | 7,120 | 54 | 1.93 |
-| 128 | 258 | 14,138 | 54 | 1.99 |
-| 256 | 514 | 28,602 | 55 | 2.02 |
-| 512 | 1,026 | 57,530 | 56 | 2.01 |
-| 1,024 | 2,050 | 115,532 | 56 | 2.01 |
+| 8 | 18 | 1,173 | 65 | — |
+| 16 | 34 | 2,019 | 59 | 1.72 |
+| 32 | 66 | 3,731 | 56 | 1.85 |
+| 64 | 130 | 7,155 | 55 | 1.92 |
+| 128 | 258 | 14,173 | 54 | 1.98 |
+| 256 | 514 | 28,637 | 55 | 2.02 |
+| 512 | 1,026 | 57,565 | 56 | 2.01 |
+| 1,024 | 2,050 | 115,567 | 56 | 2.01 |
 
 Doubling the program doubles the output, to three significant figures, across seven doublings.
-The marginal cost per line is **flat at 54–56 bytes** — it does not drift upward at any size
+The marginal cost per line is **flat at 54–56 bytes** past the first doubling — it does not drift upward at any size
 measured. Nesting does not compound either: quadrupling a view's nesting depth from 12 to 48
 multiplies the emission by 2.6× — 846 bytes to 2,178 — not 16×. (The parser refuses an indented block nested more
 than 64 levels deep, which is its own answer to how deep this can go.)
@@ -1104,14 +1104,18 @@ below under **What a count cannot see**.
 | The cursor walk is still the linear arm | 97, 997 and 4,997 moves | 50× over 50× | The before column has to keep measuring the algorithm that was replaced, or the comparison drifts into measuring two versions of the same thing. |
 | Positional-keyed removal | 2,986 crossings | 1,000–4,000 | Bounded below as well: if it drops, §16.6's account of positional keying is out of date and this file is wrong. |
 | Clearing a list | 11,000 `removeChild` | exactly 11,000 | Pinned so the O(n) teardown stays visible rather than being forgotten. |
-| Emitted `client.js` | ≤ 1,006 bytes | ≤ 2,048 | Roughly double, so a code generator that starts emitting a helper per node fails. |
-| `signal.js` + `dom.js` | 19,234 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. It fell by 4,455 bytes when the reconciler moved to `list.js`, which a program with no `each` no longer downloads. |
+| Emitted `client.js` | ≤ 1,041 bytes | ≤ 2,048 | Roughly double, so a code generator that starts emitting a helper per node fails. |
+| `signal.js` + `dom.js` | 21,407 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. It fell by 4,455 bytes when the reconciler moved to `list.js`, which a program with no `each` no longer downloads. |
 
 The binding constraint is not the row above but
 `scaling.rs::the_null_program_is_a_fraction_of_swifts`, which asserts `shipped * 3 <  73,000`
-where `shipped` is the null program's `client.js` plus the runtime. Measured: 639 + 19,234 =
-19,873, and 19,873 × 3 = 59,619 against 73,000. **The gate passes with about 4,460 bytes of
-headroom in shipped JavaScript.**
+where `shipped` is the null program's `client.js` plus the runtime. Measured: 674 + 21,407 =
+22,081, and 22,081 × 3 = 66,243 against 73,000. **The gate passes with about 2,250 bytes of
+headroom in shipped JavaScript**, which is barely over the 2,048 that
+`the_size_gate_keeps_room_to_warn_before_it_fails` keeps in reserve. Thirty-five of the bytes
+between those two numbers are the `//# sourceMappingURL` line #6 added, and the rest is runtime
+growth this regeneration also clears — the figures above had not been rerun since the reconciler
+and the styling vocabulary last moved.
 
 **It had five.** Before the reconciler moved out of `dom.js`, the same sum was 639 + 23,689 =
 24,328 against a ceiling of 24,333 — the tightest this figure has ever been, and tight enough

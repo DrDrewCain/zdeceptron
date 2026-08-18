@@ -761,6 +761,30 @@ where
     fatal
 }
 
+/// The files a source map names, and where each begins in the span space
+/// (#6).
+///
+/// `zdc-resolve` links every module into one string and spans index that,
+/// so `offset` is what tells a span which file it belongs to. This is the
+/// same table [`report`] reaches through `Linked::locate` — a map and a
+/// diagnostic must name a line the same way, or the compiler tells a reader
+/// one thing and the browser another.
+///
+/// The prelude is deliberately absent. §17.4.1 resolves it into the same
+/// arenas but not into `combined`, and `zdc-codegen` records no mark from a
+/// prelude declaration for exactly that reason.
+fn source_files(linked: &zdc_resolve::Linked) -> Vec<zdc_codegen::sourcemap::SourceFile> {
+    linked
+        .modules
+        .iter()
+        .map(|module| zdc_codegen::sourcemap::SourceFile {
+            name: module.path.display().to_string(),
+            text: module.source.clone(),
+            offset: module.offset,
+        })
+        .collect()
+}
+
 /// Compile a file into `out`, reporting **every** diagnostic.
 ///
 /// The bundle is written only once the whole program has compiled. A
@@ -875,7 +899,52 @@ fn build(file: &Path, out: &Path, want_report: bool) -> ExitCode {
     });
 
     let routed = site.pages.len() > 1;
+
+    // The source maps, rendered before the file list is built because they
+    // are the only artifact this command *makes* rather than borrows (#6).
+    //
+    // Beside the module, named by the module: `page.map_name` is the same
+    // string the `//# sourceMappingURL` comment in the file carries, so the
+    // comment and the file on disk cannot disagree about what the map is
+    // called.
+    //
+    // `Content::Omit`, which is `zdc build`'s half of the decision
+    // `sourcemap::Content` documents: a released map names `app.zd` and its
+    // line and does not carry the program's text. `zdc dev` embeds.
+    let sources = source_files(&compiled.linked);
+    let maps: Vec<(PathBuf, String)> = site
+        .pages
+        .iter()
+        .map(|page| {
+            // Written even when it maps nothing, which a program whose
+            // only statements are in handlers produces. An empty map is a
+            // different fact from a missing one: the browser is told
+            // "nothing here maps" rather than logging a failed fetch on
+            // every load.
+            let (path, file) = if routed {
+                (
+                    out.join("pages").join(&page.map_name),
+                    format!("{}.js", page.slug),
+                )
+            } else {
+                (out.join(&page.map_name), "client.js".to_string())
+            };
+            (
+                path,
+                zdc_codegen::sourcemap::render(
+                    &file,
+                    &page.mappings,
+                    &sources,
+                    zdc_codegen::sourcemap::Content::Omit,
+                ),
+            )
+        })
+        .collect();
+
     let mut files: Vec<(PathBuf, &str)> = Vec::new();
+    for (path, contents) in &maps {
+        files.push((path.clone(), contents.as_str()));
+    }
     for page in &site.pages {
         if routed {
             // A module with no `view` is never routed, so a routed page
@@ -1483,8 +1552,19 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     // place a browser-imported `foreign` module in the same place (#225)
     // and two spellings of one directory is how those come apart.
     let browser = args.out.join(settings.target.browser_root());
+    // `client.js` names its map (#6), so the map is shipped with it: a
+    // deployment that dropped it would serve a bundle whose last line asks
+    // for a file the target 404s. Content omitted, as `zdc build` omits it
+    // — a deployed map is the one that sits at a guessable public URL.
+    let client_map = zdc_codegen::sourcemap::render(
+        "client.js",
+        &bundle.mappings,
+        &source_files(&compiled.linked),
+        zdc_codegen::sourcemap::Content::Omit,
+    );
     let mut files: Vec<(PathBuf, &str)> = vec![
         (browser.join("client.js"), bundle.client_js.as_str()),
+        (browser.join(zdc_codegen::CLIENT_MAP), client_map.as_str()),
         // The stylesheet's name carries a content hash and the document
         // links that name, so the bundle says where it goes (#137).
         (

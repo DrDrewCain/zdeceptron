@@ -3172,6 +3172,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // A handler is not a function body, so there is nothing for a
             // tail call to jump back to.
             tail: None,
+            // Collected and dropped, and this is the honest half of #6's
+            // scope. The body below is trimmed, re-indented, wrapped in an
+            // arrow and interpolated into a binding, none of which carries
+            // an offset — so rebasing these marks would produce a map that
+            // *looks* right and points at the wrong line. Mapping handlers
+            // needs the template emitter to carry offsets, which is a
+            // change to `Emission` and not to this line.
+            marks: Vec::new(),
         };
         statements.block(handler.body, 4, &mut body);
         let awaited = statements.awaited;

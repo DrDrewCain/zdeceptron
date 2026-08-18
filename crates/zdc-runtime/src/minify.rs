@@ -246,6 +246,22 @@ pub fn javascript(source: &str) -> String {
             continue;
         }
         if byte == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            // **`//#` survives.** A pragma is not prose: `//#
+            // sourceMappingURL=…` is the only thing that tells a browser
+            // where the map is (#6), and a minifier that removed it would
+            // leave the map written, served and unreachable — a failure
+            // that looks exactly like not having source maps at all.
+            //
+            // The exception is on `//#` rather than on the URL, because
+            // `//@` is the same pragma's older spelling and a rule that
+            // named one comment would be a rule about this release.
+            if bytes.get(i + 2) == Some(&b'#') {
+                let end = source[i..].find('\n').map_or(bytes.len(), |o| i + o);
+                out.push_str(&source[i..end]);
+                i = end;
+                gap = Gap::Newline;
+                continue;
+            }
             // To the line break, which is left for the arm above to see:
             // dropping it here would join two statements.
             i = match source[i..].find('\n') {

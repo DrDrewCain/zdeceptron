@@ -64,8 +64,8 @@ no evidence is marked not done, regardless of what any other document says.
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 961 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
-| **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 974 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ✅ **done** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests); Source Map v3 beside every emitted module (`zdc-codegen/src/sourcemap.rs`, `zdc-codegen/tests/sourcemap.rs`). **What the map claims is narrower than "source maps" reads:** one mapping per emitted *statement* in a top-level `function` or declaration, which answers a stack trace with the `.zd` line that produced it. Event handlers and view code are not mapped — see the absence below. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
 | **M8** | Style compilation to static CSS | ✅ **done** | `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle`. **The surface is no longer small: 33 style arguments (`elements.rs::STYLE_ARGUMENTS`) plus six global ones, each with a value grammar in `crates/zdc-codegen/src/style.rs`, and 38 of them take any of seven conditional prefixes** (`hover`, `focus`, `active`, `disabled`, `narrow`, `wide`, `dark`), so one class carries its own `:hover`, breakpoint and `prefers-color-scheme` rules and the interning property still holds. Tests: `class_and_style.rs` 8, `injection.rs` 28, `styles.rs` 6 unit. **Verified by building:** `zdc build examples/todo.zd` emits `text-decoration-line: line-through` for a done item, which is the one visual state the canonical benchmark is about and could not previously render. `runtime/base.css` is 3,641 bytes, up from 927. |
@@ -218,7 +218,7 @@ total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 961 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-codegen` | 974 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 235 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
 | `zdc-graph` | 231 | Including the information-flow negative suite and the failure channel. |
@@ -441,8 +441,22 @@ the one thing standing between three examples and a successful build; those thre
 
 ### Other absences, each re-verified
 
-- **No source maps.** Grepped: no `sourceMap` anywhere in `crates/` or `runtime/`. A browser
-  stack trace points at generated JavaScript.
+- **~~No source maps.~~ Landed, for statements.** `zdc build` writes `client.js.map` beside
+  `client.js` (and `pages/<slug>.js.map` beside each routed module) and the bundle names it with
+  a `//# sourceMappingURL` line, so a browser stack trace at `client.js:198:5` now resolves to
+  `examples/edit-distance.zd:94:5`. `crates/zdc-codegen/tests/sourcemap.rs` decodes the map it
+  asserts against rather than comparing strings, because every way of getting base64 VLQ wrong
+  produces a document that still parses.
+- **Handler and view code is still unmapped.** The map covers statements in top-level functions
+  and the declarations of `state`/`derived`. An `on click` body is emitted into a string that is
+  then trimmed, re-indented, wrapped in an arrow and interpolated into a binding, and none of
+  that carries an offset — so a mapping there would point at the wrong line rather than at none.
+  Server functions are unmapped too, and deliberately: a server trace happens where the `.zd`
+  file is.
+- **A released map does not carry the program's source.** `zdc build` writes `sources` and no
+  `sourcesContent`, so the map names `app.zd:12` without publishing `app.zd` at a guessable URL.
+  `zdc dev` embeds it, because the `.zd` sits outside the served root and devtools has nothing
+  to fetch.
 - **No dialects.** Only `english`. The enabling structure is in place; no second surface exists.
 - **No `record … unique`.** Every list reconciles positionally.
 - **~~No build-time file reading.~~ Landed.** `build read`, `build list` and `build markdown`
