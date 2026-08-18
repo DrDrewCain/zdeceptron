@@ -13,8 +13,8 @@
 //!   which the client walk stops at a `server` read is simultaneously the
 //!   dead-code cut and the `Remote of T` introduction, and that identity
 //!   is what makes §14A.1's exclusion *provable* rather than heuristic.
-//! * **`ifc`** decides whether any secret reaches any of §14G.1.3(c)'s six
-//!   sinks, through data **or through control**. §5.3 claimed
+//! * **`ifc`** decides whether any secret reaches any of §14G.1.3(c)'s
+//!   seven sinks, through data **or through control**. §5.3 claimed
 //!   non-interference from a data-dependency analysis, which cannot see a
 //!   branch outcome; §17.3 is the correction.
 //!
@@ -32,7 +32,7 @@ pub mod split;
 
 pub use crate::authority::{authority, Analysis, Flow, Obligation, ObligationSite, Solution};
 pub use crate::diag::{GraphError, Severity};
-pub use crate::ifc::{ifc, Cleared, Sink, SinkSite, Verdict};
+pub use crate::ifc::{ifc, Cleared, Producer, Sink, SinkSite, Verdict};
 pub use crate::label::{Label, Obs, Secrecy};
 pub use crate::root::{
     CommandKey, Ctx, MutOp, MutSite, PathKeySeg, Region, Root, RootId, RootKind, RootOrigin, BUILD,

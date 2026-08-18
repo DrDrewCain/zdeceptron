@@ -118,7 +118,16 @@ pub enum BoundaryEdge {
     /// construct and nothing started emitting the edge. Sink 3 stayed
     /// declared, listed in `Sink::CLOSED_LIST`, and checked nowhere.
     BuildOutput { def: DefId, path: String },
-    /// Sink 5. Unconstructible: there is no trigger runtime (§17.7).
+    /// Sink 5. Unconstructible: nothing constructs [`RootOrigin::Trigger`]
+    /// because the grammar has no `every`/`inbound` declaration to root
+    /// one, so there is no root for this edge to name (§17.7).
+    ///
+    /// This is one of the two conditions in [`crate::ifc::Sink::producer`]
+    /// — the other being a logging call in a function bundle — and the
+    /// day either holds, sink 5 needs an obligation site rather than this
+    /// comment. `BuildOutput` above is what happens otherwise: it carried
+    /// the same sentence, the construct it named was added, and the sink
+    /// stayed declared and checked nowhere.
     TriggerFail { root: RootId },
 }
 

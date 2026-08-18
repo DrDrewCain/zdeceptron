@@ -48,11 +48,55 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 /// [`SinkSite::PlatformLog`] is never constructed. It is the only one
 /// left, and the count is stated here because a sink that cannot fire and
 /// a sink nobody wired look identical from outside this crate.
+/// [`Sink::producer`] says the same thing as a total function, so the
+/// count is *checked* rather than counted by whoever reads this.
 ///
-/// * [`Sink::PlatformLog`] — **unconstructible.** Nothing in the language
-///   logs and nothing in `zdc-codegen` emits a call that does: the client
-///   bundle, the function bundles and the runtime contain no logging call
-///   at all. There is no trigger runtime for a `TriggerFail` edge either.
+/// * [`Sink::PlatformLog`] — **unconstructible**, and the reason given
+///   here was false (#22). It read *"nothing in `zdc-codegen` emits a
+///   call that does: the client bundle, the function bundles and the
+///   runtime contain no logging call at all"*. The client half of that is
+///   wrong, and wrong about emitted bytes rather than about intent:
+///   `zdc-codegen` writes `reportFailure as $failed` into every handler
+///   that awaits a write (`view.rs`), and `runtime/rpc.js`,
+///   `runtime/dom.js` and `runtime/keys.js` each call `reportError`.
+///   Build any program that increments a `durable` counter and the
+///   emitted `client.js` contains the call.
+///
+///   What is true is narrower, and it is two facts rather than one.
+///
+///   **§5.3a's medium is the platform's, not the browser's.** A platform
+///   log, a retry record and a redelivery record are written by the host
+///   *about a server execution*; they outlive the request, they are
+///   replicated to systems with other access rules, and they are read by
+///   people the response was never shown to. The three calls above hand a
+///   value to the visitor's own browser, and the browser is the reader
+///   sinks 1, 2, 4 and 7 already exist for — a machine cannot leak to
+///   itself. The half that runs where the platform is logging is the
+///   **function** bundle, and that one really does contain no logging
+///   call: it is `export async function handler($args) { return … }` and
+///   nothing else.
+///
+///   **And the browser is told nothing new.** The value `$failed`
+///   receives is the transport's rejection, whose `message` is the
+///   endpoint's own error body (`runtime/rpc.js`'s `reason`). So it
+///   arrived down the channel [`Sink::ResponseBody`] rules on, at the
+///   endpoint [`Ifc::response_bodies`] obliges — the browser's error
+///   channel is not an eighth medium, it is a second copy of the fourth.
+///
+///   **What would make it a producer**, either half of which is enough:
+///   `RootOrigin::Trigger` becoming constructible — it needs an
+///   `every`/`inbound` declaration, which the grammar does not have — at
+///   which point [`crate::split::BoundaryEdge::TriggerFail`] has a root
+///   to name and the platform's retry record has a program's value in it;
+///   or any logging call emitted into a *function* bundle, which puts a
+///   value somewhere the visitor cannot see and the operator's log
+///   provider can. Both are pinned:
+///   `the_grammar_has_no_trigger_declaration_to_root_a_platform_log` in
+///   `zdc-graph`, and `nothing_emitted_writes_to_a_platform_log` in
+///   `zdc-codegen` — beside
+///   `every_logging_call_in_the_shipped_runtime_is_named_here`, which
+///   names the three the runtime does make and why none of them is this
+///   sink.
 ///
 /// The other two that used to be here are both constructed now, and each
 /// stopped being unconstructible for a different reason. Both are kept on
@@ -84,6 +128,16 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 ///   `return await $store.incr('tally', …)` to the browser. It is now
 ///   obliged at the endpoint itself, by `Ifc::response_bodies`, which is
 ///   what "genuinely checked at the return" has to mean.
+///
+///   **This is the other sink #22 named**, and the condition it was
+///   recorded as waiting for — an FFI HIR, so that an outbound `fetch`
+///   could be written down — was never the condition. A response body is
+///   not something a program asks for; it is what an endpoint the *split*
+///   invented returns, and the split already had every endpoint in a
+///   list. So the producer is fourteen lines over `TierSplit::endpoints`
+///   and owes nothing to `foreign`. Recorded because #22's own evidence
+///   was a table of *pending dependencies*, and a dependency nobody
+///   re-derives outlives the thing it was true about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sink {
     ClientState,
@@ -147,6 +201,68 @@ impl Sink {
             Sink::OutboundRequest => "a request the browser sends",
         }
     }
+
+    /// Whether any obligation site in this pass constructs this sink —
+    /// §17.7's table, as a total function (#22).
+    ///
+    /// The table was prose, it named two sinks with no producer, and by
+    /// the time anyone re-read it one of the two had acquired one and the
+    /// prose had not moved. A `match` moves: adding an eighth sink is a
+    /// compile error here, and a producer that is deleted fails the test
+    /// that names the sink rather than a count nobody reads.
+    ///
+    /// **Not the same question as "can a program provoke `code()`".** A
+    /// sink is [`Producer::Wired`] when the pass raises an obligation at
+    /// it, which is what makes every program that reaches it ruled on.
+    /// Whether the obligation can ever *fail* is a separate question with
+    /// a separate answer: [`Sink::BuildArtifact`] is wired and no program
+    /// can fail it, because two placement rules independently refuse
+    /// every route by which a secret could reach a `static` signal —
+    /// `flow.rs`'s
+    /// `only_the_placement_rules_kept_a_secret_out_of_a_build_artefact`
+    /// is what records that. Conflating the two is how sink 3 was left
+    /// unwired while looking covered.
+    pub fn producer(self) -> Producer {
+        match self {
+            // `Walk::read`, at the read the browser performs.
+            Sink::ClientState | Sink::View => Producer::Wired,
+            // `discharge_signal`, against the computed label of an
+            // `emitting static` signal.
+            Sink::BuildArtifact => Producer::Wired,
+            // `Ifc::response_bodies`, over `TierSplit::endpoints`.
+            Sink::ResponseBody => Producer::Wired,
+            // `Ifc::live_sync`, over the split's two boundary edges.
+            Sink::LiveSync => Producer::Wired,
+            // `Walk`'s URL-bearing attribute and `request` argument.
+            Sink::OutboundRequest => Producer::Wired,
+            Sink::PlatformLog => Producer::Awaiting(
+                "an `every`/`inbound` trigger declaration, which would give \
+                 `RootOrigin::Trigger` a root for `BoundaryEdge::TriggerFail` to name — or any \
+                 logging call emitted into a function bundle, which is the half of the output \
+                 that runs where the platform is writing the log",
+            ),
+        }
+    }
+}
+
+/// Whether a [`Sink`] has an obligation site, and what it is waiting for
+/// when it has none.
+///
+/// Deliberately carries the condition rather than a bare `bool`. A sink
+/// with no producer is not by itself a defect — it may be a medium
+/// nothing in the language can reach yet — but *"no producer"* and *"no
+/// producer, and here is what changes that"* are different claims, and
+/// only the second one survives being read a year later by somebody
+/// adding the missing construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Producer {
+    /// Some site in this pass raises an obligation naming this sink, so
+    /// every program that reaches it is ruled on.
+    Wired,
+    /// No site does. The sentence is the condition under which one has to
+    /// exist, and it is a sentence rather than a flag because the flag is
+    /// what a reader would have believed without checking.
+    Awaiting(&'static str),
 }
 
 /// Where a sink is, precisely enough for an emitter to ask about it.
@@ -275,7 +391,7 @@ enum ObligationKind {
     Write(DefId),
     /// A signal's declared label versus what its initialiser produced.
     Declaration(DefId),
-    /// A value reaching one of the six sinks.
+    /// A value reaching one of the seven sinks.
     Escape(Sink, SinkSite),
     /// A value passed to a parameter of a `foreign … is client`
     /// (§14E.3 row 1) — the definition, and which parameter.
