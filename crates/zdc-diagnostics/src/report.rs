@@ -1,6 +1,6 @@
 //! `dist/report.json` — §19.5's audit trail, rendered.
 //!
-//! [`zdc_graph::report`] decides *what* is in the trail and states what it
+//! [`zdc_graph::report()`] decides *what* is in the trail and states what it
 //! does not claim; this decides what the file looks like. The split is the
 //! one the rest of this crate already draws: a `GraphError` is a finding
 //! and [`crate::render`] is how one reaches a person.

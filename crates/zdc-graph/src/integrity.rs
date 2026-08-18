@@ -66,7 +66,7 @@
 //! **R6 is narrowed, and only narrowed.** It reads *"a purity grant has no
 //! argument chain for an attacker-reachability walk to follow"*, and its
 //! consequence was that the grants §21.7 leans on were the ones no review
-//! artifact reached. `zdc build --report` now reaches them: [`crate::report`]
+//! artifact reached. `zdc build --report` now reaches them: [`crate::report()`]
 //! enumerates every asserted grant with its declaration, its call sites and
 //! the `release` bodies that depend on it. The walk itself is **not**
 //! built, and giving the grant an argument chain would not build it — see
@@ -88,7 +88,7 @@
 //! attacker who supplies low-integrity inputs cannot influence what is
 //! released, and the condition that enforces it asks two things at each
 //! declassification: that the value released is high integrity, and that
-//! *the decision to release it* is. [`crate::authority`]'s `rel_arg` is
+//! *the decision to release it* is. [`mod@crate::authority`]'s `rel_arg` is
 //! the first, written out as an inference rule at its own doc comment and
 //! quantified over the argument list. **The second is not written
 //! anywhere.** The walk carries a program counter — `Walk::pc`, described
@@ -160,7 +160,7 @@
 //!   other, and the closed direction is entirely on the first side.
 //!
 //! **A claim made today would also be vacuous, which is the strongest
-//! reason not to make one.** [`crate::ifc`] treats a `release` as an
+//! reason not to make one.** [`mod@crate::ifc`] treats a `release` as an
 //! ordinary function — *"what makes it a release is checked elsewhere, not
 //! emitted"* — so no secret reaches a public sink through one, and the
 //! language reference says so under what is not implemented. A robustness
@@ -378,7 +378,7 @@ impl Grant {
     /// compiler.
     ///
     /// §19.5 needs this to mark the entries a reviewer must actually read,
-    /// and [`crate::report`] prints it beside every one of them — which is
+    /// and [`crate::report()`] prints it beside every one of them — which is
     /// the half of residual risk R6 that is now closed. Before that, the
     /// two grants this returns `true` for were the two nothing enumerated.
     ///
@@ -1074,7 +1074,7 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
 /// Every `foreign` reachable from a definition's body, with the span that
 /// reaches it. Transitive over calls, as REL-PURE requires.
 ///
-/// Visible to [`crate::report`] as well as to [`rel_pure`], because the two
+/// Visible to [`crate::report()`] as well as to [`rel_pure`], because the two
 /// want opposite answers from one walk: the rule asks *which foreigns does
 /// this release reach that it may not*, and the report asks *which releases
 /// reach this grant*. Deriving the second from a second walk is how the two

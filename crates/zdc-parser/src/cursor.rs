@@ -338,7 +338,7 @@ impl Parser {
         }
     }
 
-    /// [`Cursor::at_soft`] `offset` tokens ahead.
+    /// [`Parser::at_soft`] `offset` tokens ahead.
     ///
     /// Two-token lookahead, for the one place a soft keyword is only the
     /// construct when the *next* word confirms it: `durable per visitor`

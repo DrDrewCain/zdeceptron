@@ -49,7 +49,7 @@
 //!
 //! **No schema version, and that is now a named gap rather than an
 //! unasked question.** Nothing here records what shape wrote a value —
-//! [`Json`](crate::value::Json) is text this crate never parses, and
+//! [`crate::value::Json`] is text this crate never parses, and
 //! `META` holds one row. #37 decided the answer: a digest of the program's
 //! durable shape, written under a reserved key, checked when a host is
 //! built, refusing a mismatch by name. It is specified in the reference
