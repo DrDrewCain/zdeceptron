@@ -1143,6 +1143,10 @@ of two samples divides out, which is what makes this a gate rather than a survey
   untestable in this environment.
 - Anything about §14A.1's monomorphic-shape claim. Hidden-class behaviour is a V8 property and
   `boa` does not model it.
-- Anything about `server` or `durable` placement. The compiler emits both halves — the client's
-  `remote`/`call` and one file per endpoint — but no store, no adapter and no host exists to run
-  the server half against, so there is no cold start, no round trip and no persistence to count.
+- **The cost in time of `server` or `durable` placement.** The *size* of the emitted server half
+  is now counted — see "What one bundle per root duplicates" above, which measures what the
+  endpoints of a program weigh and how much of that weight is the same text twice. What is still
+  missing is everything with a clock in it. `zdc-host` executes the emitted handlers, but it does
+  so in the compiler's own `boa` interpreter, so a latency from it describes `boa`; and cold
+  start is a property of a platform `zdc deploy` has never been run against. There is still no
+  round trip and no persistence to time.

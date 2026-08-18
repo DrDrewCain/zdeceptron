@@ -48,12 +48,13 @@ mod table;
 
 pub use growth::{emitted_bytes, least, time_emission, time_front_end, Curve, Sample};
 pub use scaling::{
-    build, code_lines, deepest_fold, linked_runtime_bytes, linked_runtime_bytes_in,
-    linked_runtime_bytes_with_assertions, measure_emission, program_with_components,
-    program_with_depth, program_with_roots, program_with_signals, program_without_components,
-    runtime_js_bytes, survey, template_bytes, time_graph_passes, EmissionTime, Emitted, GraphTimes,
-    FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE,
-    SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
+    build, code_lines, deepest_fold, duplication, endpoint_duplication, linked_runtime_bytes,
+    linked_runtime_bytes_in, linked_runtime_bytes_with_assertions, measure_emission,
+    program_with_components, program_with_depth, program_with_roots, program_with_shared_endpoints,
+    program_with_signals, program_without_components, runtime_js_bytes, survey, template_bytes,
+    time_graph_passes, Duplication, EmissionTime, Emitted, GraphTimes, FOREIGN_VIEW_PROGRAM,
+    NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_JS,
+    SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
 };
 pub use shape::{benchmark_row, emitted_row, RowShape};
 pub use sizes::{
