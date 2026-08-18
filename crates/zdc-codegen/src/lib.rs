@@ -519,6 +519,12 @@ pub struct SiteBundle {
     /// The union over every page of the runtime modules it reaches. The
     /// runtime is shared by the documents, so the *set* is a union while
     /// each page's import list stays its own (§16.3.1).
+    ///
+    /// A routed site's set also names [`BASE_STYLESHEET`], which is not a
+    /// module and is not imported by one — the documents `<link>` it. It
+    /// is here because this set is what every writer of a bundle copies,
+    /// and a file every document shares is exactly what that is for
+    /// (#136).
     pub runtime: BTreeSet<&'static str>,
     pub manifest_json: String,
     pub functions: Vec<ServerFunction>,
@@ -622,7 +628,11 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &page_title(options, &metadata, "/"),
                 Shell {
                     boot: "./boot.js",
-                    styles: &format!("./{styles_path}"),
+                    // One sheet, with `base.css` inside it. An unrouted
+                    // program has one document, so it has nothing to share
+                    // the base with and a second request would buy it
+                    // nothing (#136). The name carries its hash (#137).
+                    styles: &[&format!("./{styles_path}")],
                     import_map: &emitted.import_map,
                     connect: &emitted.connect_origins,
                     painted: painted.as_deref(),
@@ -797,7 +807,11 @@ pub fn compile_site(
                         &page_title(options, &metadata, &page.url),
                         Shell {
                             boot: &boot,
-                            styles: &format!("/{styles_path}"),
+                            // The shared sheet first, this page's generated
+                            // rules second: that is the cascade order the
+                            // single file used to have between its two
+                            // halves, restated as document order (#136).
+                            styles: &[BASE_STYLESHEET_URL, &format!("/{styles_path}")],
                             import_map: &emitted.import_map,
                             connect: &emitted.connect_origins,
                             painted: painted.as_deref(),
@@ -817,6 +831,12 @@ pub fn compile_site(
         errors.dedup_by(|a, b| a.message == b.message && a.span == b.span);
         return Err(errors);
     }
+
+    // Every document links it, so it is shipped once (#136). It joins the
+    // runtime set rather than becoming an artifact of its own because the
+    // runtime directory is already the place a routed build keeps what the
+    // documents share, and every writer of a bundle already copies it.
+    runtime.insert(BASE_STYLESHEET);
 
     let durable = durable_keys(hir, inputs.split);
     let names = match names {
@@ -858,6 +878,23 @@ pub fn compile_site(
         pages,
     })
 }
+
+/// The base stylesheet, as a routed build writes it (#136).
+///
+/// It sits beside the runtime modules because it is the same kind of
+/// thing: one file, identical for every document, shared by all of them.
+/// That is also what makes it free to ship — [`runtime_files`] already
+/// names this directory's contents, so `zdc build`, `zdc dev` and every
+/// deploy adapter write it without learning a new artifact.
+pub const BASE_STYLESHEET: &str = "runtime/base.css";
+
+/// The URL a routed document links [`BASE_STYLESHEET`] by.
+///
+/// Root-absolute, for the reason `pages/<slug>.css` is: a document's own
+/// URL is `/`, `/writing` or `/writing/routing`, so a relative href would
+/// resolve against a different directory for each of them and be wrong
+/// for all but one.
+const BASE_STYLESHEET_URL: &str = "/runtime/base.css";
 
 /// Where a document's module and stylesheet sit relative to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1424,7 +1461,15 @@ fn emit(
         import_map,
         remote_origins,
         connect_origins: used.connect.clone(),
-        styles_css: styles.stylesheet(),
+        // A routed document's sheet carries the generated rules alone:
+        // `base.css` is identical for every page of a site, so it is
+        // shipped once to `runtime/base.css` and linked rather than
+        // inlined eleven times (#136). An unrouted program keeps the one
+        // file it has always had — see `Styles::generated`.
+        styles_css: match layout {
+            Layout::Single => styles.stylesheet(),
+            Layout::Page => styles.generated(),
+        },
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,
         functions: server,
@@ -2106,8 +2151,11 @@ fn emit_functions(
 struct Shell<'a> {
     /// The module the page loads, as an href relative to the document.
     boot: &'a str,
-    /// The generated stylesheet, likewise.
-    styles: &'a str,
+    /// Every sheet this document links, in cascade order. A list
+    /// rather than one path because a routed document links two —
+    /// the shared `base.css` and its own generated rules — and
+    /// which wins a conflict is decided by this order (#136).
+    styles: &'a [&'a str],
     import_map: &'a BTreeMap<String, String>,
     connect: &'a BTreeSet<String>,
     /// What the build host painted, or `None` for a document that ships
@@ -2184,10 +2232,14 @@ fn index_html(metadata: &Metadata, options: &Options, title: &str, shell: Shell<
             js::html_attribute(icon)
         ));
     }
-    head.push_str(&format!(
-        "  <link rel=\"stylesheet\" href={}>\n",
-        js::html_attribute(styles)
-    ));
+    // The compiler's own sheets first, the project's `assets/*.css` after,
+    // so a hand-written rule can still override a generated one.
+    for stylesheet in styles {
+        head.push_str(&format!(
+            "  <link rel=\"stylesheet\" href={}>\n",
+            js::html_attribute(stylesheet)
+        ));
+    }
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
             "  <link rel=\"stylesheet\" href={}>\n",
@@ -2627,6 +2679,15 @@ fn manifest_json(
 pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     for module in runtime {
+        // The one entry that is not JavaScript, and so the one that does
+        // not go through `for_mode` (#136). `// $dev` is a JavaScript
+        // comment; a stylesheet has no assertions to strip, and running a
+        // line-rewriting pass over it to discover that would be a way for
+        // a release build to differ from the file by a trailing newline.
+        if *module == BASE_STYLESHEET {
+            out.push((BASE_STYLESHEET, zdc_runtime::BASE_CSS.to_string()));
+            continue;
+        }
         let source = match *module {
             "runtime/signal.js" => zdc_runtime::SIGNAL_JS,
             "runtime/dom.js" => zdc_runtime::DOM_JS,

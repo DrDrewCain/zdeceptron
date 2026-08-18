@@ -622,6 +622,50 @@ survey compiles each file on its own, without the prelude beneath it, so anythin
 host, and this harness does not run one. `blog.zd` is the one that does not parse anywhere, and
 it is the one example excluded by name in `crates/zdc-cli/tests/resolve_examples.rs`.
 
+### What a routed program duplicates across its pages (#136)
+
+`site.zd` is missing from the table above because the survey compiles each file alone and it
+imports a module. It is also the only routed example, so the one program whose cost is *per
+document* is the one the per-line survey cannot see. Issue #136 asked what that cost is; nothing
+had measured it.
+
+Measured on `site.zd` (5 documents) and on a synthetic ten-route site (12 documents: a home
+page, ten parameterised posts, and the not-found page), counting every byte a build writes:
+
+| | `site.zd`, before | `site.zd`, after | ten routes, before | ten routes, after |
+|---|---|---|---|---|
+| `pages/*.js` | 4,400 | 4,400 | 10,350 | 10,350 |
+| `pages/*.css` | 18,625 | 420 | 44,665 | 973 |
+| `runtime/base.css` | — | 3,641 | — | 3,641 |
+| documents | 3,272 | 3,527 | 7,817 | 8,429 |
+| `pages/*.boot.js` | 1,086 | 1,086 | 2,587 | 2,587 |
+| **total written** | **27,383** | **13,074** | **65,419** | **25,980** |
+
+**The duplication was the stylesheet, and it was most of the build.** `base.css` is 3,641 bytes
+and identical for every document of a site, and it was inlined into every one of them: four
+redundant copies in `site.zd` and eleven in the ten-route site, which is 61% of everything that
+build wrote. It is now written once and linked, which is what the `runtime/` row is.
+
+**No first visit got slower.** A reader landing on any page still fetches 3,641 + 79 bytes of
+CSS. The second page fetches 79, because the base is already in the cache — a 98% drop on every
+navigation after the first. The documents grew 51 bytes each, for the second `<link>`, and that
+is the whole of what the split costs.
+
+**An unrouted program is untouched**, deliberately: it has one document, so there is nothing to
+share the sheet with, and splitting would buy it a second round trip and no bytes. The
+null-program figures below, and the generated `styles.css` column above, are the single file
+they have always measured.
+
+**What is left is JavaScript, and the fold is what makes it.** After the split, 5,359 of the
+ten-route site's 10,350 emitted bytes are still text some other page also carries — 928 of
+`site.zd`'s 4,400. Per-page specialisation is the cause rather than an oversight: `/post/one`
+and `/post/two` differ only in one folded literal, so ten enumerated values emit ten
+near-identical modules that share a template, two helpers and most of `main`. Hoisting those
+into a module the pages import would trade §16.3.1's per-document dead-code claim — pinned by
+`one_pages_code_is_not_in_another_pages_bundle` — for cache reuse across navigations. That is a
+decision about the claim, not an optimisation of it, so it is left to the issue that owns the
+claim rather than folded in here.
+
 ### The empty-program baseline
 
 Swift's is the single most comparable figure in the two systems, because a null program is
