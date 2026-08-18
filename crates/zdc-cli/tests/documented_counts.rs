@@ -247,3 +247,65 @@ fn every_crate_has_a_row() {
         "these crates have no row in STATUS.md's per-crate test table: {missing:?}"
     );
 }
+
+/// **README's headline test count, held to the tree.**
+///
+/// This file already checks the *example* counts both documents state, and
+/// its opening explains why: a count is a fact about the tree restated in
+/// prose, and nothing fails when the two diverge. The headline in README's
+/// Status section was the one such number nothing checked, and it had
+/// rotted the furthest — **2358 tests across 20 crates against a tree of
+/// 2710 across 21**, wrong on `main` for months, in the sentence a reader
+/// meets first.
+///
+/// # Why a floor and not an equality
+///
+/// The per-crate table below is exact, and that is right for a table whose
+/// whole purpose is per-crate coverage. Applying the same rule to a
+/// headline would tax every branch that adds a test with an edit to a
+/// second document — and on a night when a dozen branches were open, the
+/// per-crate gate alone reddened nine of them, each for a number that was
+/// correct when written.
+///
+/// A floor cannot rot in the direction that misleads. The suite growing
+/// past it leaves the claim true; only *removing* tests below it fails,
+/// which is exactly when someone should be made to look.
+#[test]
+fn the_readme_does_not_overstate_its_own_test_count() {
+    let readme = std::fs::read_to_string(repository().join("README.md")).expect("README.md");
+    let claimed: usize = readme
+        .split("Over ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|word| word.parse().ok())
+        .expect(
+            "README's Status section states a test floor as `Over <n> tests pass across …`. \
+             If the wording changed, change this test with it rather than deleting it — the \
+             number is the claim a reader meets first.",
+        );
+
+    // Walked rather than listed, the same way `every_crate_has_a_row` walks
+    // it: a hand-kept list of crates is the very thing this file exists to
+    // stop trusting.
+    let measured: usize = std::fs::read_dir(repository().join("crates"))
+        .expect("the crates directory")
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .map(|name| declared_tests(&name))
+        .sum();
+    assert!(
+        measured >= claimed,
+        "README claims over {claimed} tests and the tree has {measured}. A floor only fails \
+         when tests are removed below it, so this is either a real loss of coverage or a \
+         claim that was never true."
+    );
+
+    // Non-vacuity, and the reason it is here: a parser that matched
+    // nothing, or a crate list that stopped being walked, would satisfy the
+    // inequality above by measuring zero against a claim of zero.
+    assert!(
+        claimed > 1_000 && measured > 1_000,
+        "claimed {claimed} and measured {measured} — one of the two is not being read"
+    );
+}
