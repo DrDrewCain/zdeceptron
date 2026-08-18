@@ -1829,13 +1829,18 @@ fn closing_a_dialog_writes_back_so_the_next_click_reopens_it() {
 /// rather than throwing at load.
 ///
 /// `showModal()` throws `InvalidStateError` on a node that is not
-/// connected, and every binding this compiler emits runs while the tree is
-/// still a clone of a `<template>`. Left alone that is #205's shape
-/// exactly: an exception during module evaluation, a body that stays
-/// empty, and nothing said anywhere. The opening is deferred to the
-/// microtask after the insertion, and the shim makes the end of the task
-/// explicit so that the deferral is something a test can watch happen
-/// rather than something a comment claims.
+/// connected. Left alone that is #205's shape exactly: an exception during
+/// module evaluation, a body that stays empty, and nothing said anywhere.
+/// `elements.js` therefore has two arms — open now if the node is in the
+/// document, and defer to the microtask after insertion if it is not.
+///
+/// **The root mounts its own tree before its bindings run, so this program
+/// takes the first arm.** It used to take the second, because a binding
+/// ran against a `<template>` clone; the assertion below moved when the
+/// mount did, and what it is really checking did not — the shim throws if
+/// `showModal()` is ever reached on a disconnected node, so a run that
+/// returns at all proves the element never took that path. The deferred
+/// arm is still live for a dialog that arrives in a hole filled later.
 #[test]
 fn a_dialog_that_starts_open_opens_after_the_tree_is_in_the_document() {
     let bundle = compile_source(
@@ -1856,9 +1861,9 @@ fn a_dialog_that_starts_open_opens_after_the_tree_is_in_the_document() {
          'mounted=' + $mounted + ' settled=' + $dialog.open",
     );
     assert_eq!(
-        verdict, "mounted=false settled=true",
-        "the opening cannot happen before the node is in the document, and must happen once \
-         the task that mounted it ends"
+        verdict, "mounted=true settled=true",
+        "the dialog must be open by the time the mounting task ends, and must not have reached \
+         `showModal()` on a node outside the document to get there"
     );
 }
 
