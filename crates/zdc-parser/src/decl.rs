@@ -1001,7 +1001,8 @@ impl Parser {
             });
         }
         if self.eat(&TokenKind::Set) {
-            let receiver = self.foreign_receiver("set", "A property is written on", "properties")?;
+            let receiver =
+                self.foreign_receiver("set", "A property is written on", "properties")?;
             return Ok(zdc_ast::ForeignSource::Write {
                 span: span.to(receiver),
             });
@@ -2638,7 +2639,8 @@ mod tests {
         )
         .expect_err("`set Text` names a receiver that cannot exist");
         assert!(
-            err.message.contains("A property is written on a host object"),
+            err.message
+                .contains("A property is written on a host object"),
             "the refusal is in the write's own words, not a method's or a read's; got: {}",
             err.message
         );
@@ -2664,7 +2666,8 @@ mod tests {
         // never compared successfully, so every bad receiver — `on`
         // included — was told a property is read off a host object.
         assert!(
-            err.message.contains("A method is looked up on a host object"),
+            err.message
+                .contains("A method is looked up on a host object"),
             "got: {}",
             err.message
         );

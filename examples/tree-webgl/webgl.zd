@@ -68,6 +68,10 @@ foreign newGroup is client
     from "three" as "Group"
     gives new Handle
 
+# The `aspect` here is a placeholder and nothing more. A perspective
+# camera needs one to be constructed, and at mount there is no canvas yet
+# to take it from — so the redraw below writes the real one, off the same
+# width it gives the renderer.
 foreign newCamera is client
     from "three" as "PerspectiveCamera"
     takes fov is Decimal, aspect is Decimal, near is Decimal, far is Decimal
@@ -143,6 +147,31 @@ foreign colourOf is client
     takes of material is Handle
     gives Handle
 
+# --- what a host object is told ---------------------------------------
+#
+# `set Handle as "x"` writes a property. It is the third of the three
+# things a host object's interface consists of, and the one three.js
+# needs most often: `roughness`, `metalness` and `aspect` are fields, not
+# methods, so before this they were unreachable and the values the
+# library happened to default to were the only ones this program could
+# have. A write takes the object and one value, gives nothing, and is run
+# as a `do` statement like any other effect.
+
+foreign setAspect is client
+    set Handle as "aspect"
+    takes camera is Handle, value is Decimal
+    gives nothing
+
+foreign setRoughness is client
+    set Handle as "roughness"
+    takes surface is Handle, value is Decimal
+    gives nothing
+
+foreign setMetalness is client
+    set Handle as "metalness"
+    takes surface is Handle, value is Decimal
+    gives nothing
+
 # --- what a host object does ------------------------------------------
 #
 # `on Handle as "m"` calls a method. `gives nothing` says no ZDeceptron
@@ -189,6 +218,14 @@ foreign setPixels is client
 foreign lookAt is client
     on Handle as "lookAt"
     takes eye is Handle, x is Decimal, y is Decimal, z is Decimal
+    gives nothing
+
+# A perspective camera caches its projection matrix, so writing `aspect`
+# has no effect until it is told to rebuild it. That is the shape of most
+# host-object state: a field and the method that commits it.
+foreign refreshLens is client
+    on Handle as "updateProjectionMatrix"
+    takes of camera is Handle
     gives nothing
 
 foreign drawInto is client
@@ -325,14 +362,30 @@ function fanOut with parent, level, levels, fan, index, total, rise, length, thi
 # referenced are the ones acquired at mount and are still referenced from
 # there.
 function drawTree with levels, fan
+<<<<<<< HEAD
     with wide is (decimalOf of (
         clamp with value is (widthOf of screen),
         low is 320,
         high is 1280))
+=======
+    with wide is (decimalOf of (clamp with value is (widthOf of screen), low is 320, high is 1280))
+    with high is wide * 0.58
+>>>>>>> d6ef8ca (Give the WebGL tree a camera that matches its canvas)
     do setPixels with r is gl, ratio is 2.0
-    do setSize with r is gl, wide is wide, high is (wide * 0.58), restyle is no
+    do setSize with r is gl, wide is wide, high is high, restyle is no
+
+    # The canvas's shape, written into the camera that has to match it.
+    # This used to be the constant `1.714` in the constructor above,
+    # beside a canvas of 1 / 0.58 — the picture was stretched by half a
+    # percent and nothing could notice, because the two numbers were in
+    # different declarations and only one of them was computed. It is one
+    # expression now, from the same `wide` the renderer is given.
+    do setAspect with camera is eye, value is wide / high
+    do refreshLens of eye
 
     do setHex with colour is (colourOf of bark), value is 7031610
+    do setRoughness with surface is bark, value is 0.82
+    do setMetalness with surface is bark, value is 0.05
 
     do setTo with vector is (positionOf of eye), x is 0.0, y is 2.0, z is 5.4
     do lookAt with eye is eye, x is 0.0, y is 1.9, z is 0.0
