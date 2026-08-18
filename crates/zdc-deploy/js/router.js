@@ -105,7 +105,7 @@ export async function route(request, endpoints, store, env, config) {
   }
   if (name === POLL) {
     const refused = refuseVersion(url.searchParams.get(WIRE_PARAM), '`poll`');
-    return refused || once(url, store);
+    return refused || once(url, store, config);
   }
 
   const endpoint = endpoints[name];
@@ -202,7 +202,7 @@ function message(error) {
  * leaving, is a reconnect frequency rather than a second code path.
  */
 export function watch(request, url, store, config) {
-  const keys = watchedKeys(url);
+  const keys = watchedKeys(url, config);
   if (keys.length === 0) return json({ error: '`live` needs `?keys=`' }, 400);
 
   const encoder = new TextEncoder();
@@ -311,9 +311,30 @@ export function watch(request, url, store, config) {
   });
 }
 
-/** The `?keys=` list, shared by both transports so they cannot disagree. */
-function watchedKeys(url) {
-  return (url.searchParams.get('keys') || '').split(',').filter((key) => key !== '');
+/**
+ * The `?keys=` list, narrowed to the keys this program declares.
+ *
+ * **Narrowed rather than trusted, which is `zdc dev`'s rule and was not
+ * this router's.** The query string arrives from outside; a key the
+ * program never declared would otherwise be a way to read any value in
+ * the store by guessing its name. `zdc-dev`'s `permitted` has refused
+ * that since it was written, and the deployed artefact — the one on the
+ * public internet — did not, which is the wrong way round.
+ *
+ * Both transports share this so they cannot disagree, and both are
+ * reachable by `GET`: their branches in `route` return before the `POST`
+ * check that guards ordinary endpoints.
+ *
+ * An unknown key is dropped rather than refused. A subscriber asking for
+ * one is a stale client, not an attack in progress, and answering 400
+ * would break a tab that was open across a deploy that removed a cell —
+ * the same reasoning `permitted` gives.
+ */
+function watchedKeys(url, config) {
+  const declared = new Set(config.durableKeys ?? []);
+  return (url.searchParams.get('keys') || '')
+    .split(',')
+    .filter((key) => key !== '' && declared.has(key));
 }
 
 /**
@@ -326,8 +347,8 @@ function watchedKeys(url) {
  * matters: none of the four stores has one, and the shapes that poll are
  * exactly the ones that cannot hold a stream to compensate.
  */
-async function once(url, store) {
-  const keys = watchedKeys(url);
+async function once(url, store, config) {
+  const keys = watchedKeys(url, config);
   if (keys.length === 0) return json({ error: '`poll` needs `?keys=`' }, 400);
 
   const seq = Date.now();

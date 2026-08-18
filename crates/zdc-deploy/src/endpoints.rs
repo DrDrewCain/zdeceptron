@@ -165,22 +165,38 @@ pub fn schedule(functions: &[ServerFunction]) -> String {
 /// Generated from the same [`Capabilities`] the report renders, so the
 /// numbers a user is told and the numbers the stream actually obeys are one
 /// value rather than two that agree today.
-pub fn config(capabilities: &Capabilities) -> String {
+pub fn config(capabilities: &Capabilities, durable: &[String]) -> String {
+    let keys = durable
+        .iter()
+        .map(|key| format!("'{}'", escape(key)))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "// zdc · generated, do not edit\n\
-         // The timings `CAPABILITIES.md` reports, as the stream obeys them.\n\
+         // What the router needs that is not the same on every target: the\n\
+         // timings `CAPABILITIES.md` reports, and the keys this program\n\
+         // declares.\n\
          //\n\
          // `maxStreamSeconds` of 0 means the platform documents no ceiling.\n\
+         //\n\
+         // `durableKeys` is the whole of what a subscriber may ask for. The\n\
+         // `?keys=` list arrives from outside, and a key the program never\n\
+         // declared would otherwise be a way to read any value in the store\n\
+         // by guessing its name — which is what `zdc dev` refuses in\n\
+         // `permitted`, and what this file exists to let the router refuse\n\
+         // the same way.\n\
          \nexport const config = {{\n\
          \x20 heartbeatSeconds: {},\n\
          \x20 idleSeconds: {},\n\
          \x20 maxStreamSeconds: {},\n\
          \x20 pollSeconds: {},\n\
+         \x20 durableKeys: [{}],\n\
          }};\n",
         capabilities.heartbeat_seconds,
         capabilities.idle_seconds,
         capabilities.stream.ceiling_seconds(),
         capabilities.poll_seconds,
+        keys,
     )
 }
 
