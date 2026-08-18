@@ -473,7 +473,18 @@ read is `Remote of T` and that it crosses the network, because that is what the 
 decided (§5.2). Semantic tokens carry the same information as a modifier, so client, server and
 durable state can be told apart at a glance.
 
-See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
+One server, so every editor that speaks the protocol gets all of it:
+[`editors/`](editors/README.md) has the configuration for
+[VS Code](editors/vscode/README.md), [Neovim](editors/neovim/README.md) and
+[Helix](editors/helix/README.md), the four facts any other LSP client needs, and — per
+editor — what was actually run against the compiler rather than only written down.
+
+Highlighting is the one thing that does not travel, because every editor wants a different
+artefact for it. VS Code has the TextMate grammar in `editors/vscode/syntaxes/`; Neovim needs
+no grammar at all, because it colours a `.zd` file from the language server's semantic tokens;
+Helix implements neither a grammar for this language nor semantic tokens, so it runs the server
+and shows the file in one colour. There is no tree-sitter grammar, which is also why there is
+no Zed extension — `editors/README.md` has the argument.
 
 ## Building
 

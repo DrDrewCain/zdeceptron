@@ -1,0 +1,29 @@
+# ZDeceptron for Helix.
+#
+# Merge into `~/.config/helix/languages.toml` — Helix merges a user file
+# over its built-in one, and `zdeceptron` is not built in, so this adds a
+# language rather than overriding anything.
+#
+# There is no `grammar` key and no `[[grammar]]` block, because no
+# tree-sitter grammar for this language exists. Helix will run the
+# language server and will not colour the file. `README.md` beside this
+# file says what that costs and why it is not fixed here.
+
+[[language]]
+name = "zdeceptron"
+scope = "source.zdeceptron"
+file-types = ["zd"]
+comment-token = "#"
+# Indentation is syntax in this language, and four spaces is not a
+# preference: `zdc_fmt::INDENT` is 4, so a buffer indented any other way
+# is one `zdc fmt` away from a diff.
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["zdc"]
+
+# The server is a subcommand of the compiler, so there is no second binary
+# to install and no port to configure — `zdc lsp` speaks the protocol on
+# stdin and stdout. Give `command` an absolute path if `zdc` is not on the
+# `PATH` Helix inherits.
+[language-server.zdc]
+command = "zdc"
+args = ["lsp"]
