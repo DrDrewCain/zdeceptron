@@ -1659,6 +1659,12 @@ a diagnostic.
 | `Figure` | `figure` | — | yes | — |
 | `Caption` | `figcaption` | text, or omit it and use children | yes | — |
 | `Canvas` | `canvas` | — | no | — |
+| `Svg` | `svg` | — | yes | `viewBox` |
+| `Group` | `g` | — | yes | — |
+| `Path` | `path` | — | no | `outline` |
+| `Circle` | `circle` | — | no | `x`, `y`, `radius` |
+| `Segment` | `line` | — | no | `fromX`, `fromY`, `toX`, `toY` |
+| `Scene` | `canvas` | — | yes | `viewBox` |
 | `Button` | `button` | text | yes | — |
 | `Form` | `form` | — | yes | — |
 | `Input` | `input` | the text it edits, two-way | no | — |
@@ -1666,6 +1672,7 @@ a diagnostic.
 | `PasswordInput` | `input` | the text it edits, two-way | no | — |
 | `NumberInput` | `input` | the number it edits, two-way, `Option` | no | — |
 | `DateInput` | `input` | the number it edits, two-way, `Option` | no | — |
+| `FileInput` | `input` | the name of the file chosen, two-way, `Option` | no | — |
 | `Slider` | `input` | the number it edits, two-way | no | `least`, `most` |
 | `Select` | `select` | the `choice` variant it edits, two-way | no | — |
 | `Radio` | `input` | the signal every radio in the group shares | no | `option`, `label` |
@@ -1675,6 +1682,7 @@ a diagnostic.
 | `Legend` | `legend` | text | no | — |
 | `Details` | `details` | — | yes | — |
 | `Summary` | `summary` | text | no | — |
+| `Dialog` | `dialog` | whether the modal is showing, two-way | yes | `label` |
 | `Spinner` | `span` | — | no | — |
 | `Progress` | `progress` | the number it draws, read only | no | — |
 | `Meter` | `meter` | the number it draws, read only | no | — |
