@@ -61,7 +61,7 @@ no evidence is marked not done, regardless of what any other document says.
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 933 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 834 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 53 (plus 4 ignored: three surveys and one timed sweep). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated, and `ci.yml`'s `asymptotics` job gates the one thing an exact-match on bytes cannot see — a pass getting slower without its output changing (#165). **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
@@ -224,7 +224,7 @@ stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
-| `zdc-bench` | 51 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
+| `zdc-bench` | 54 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
 | `zdc-deploy` | 45 | Four platform adapters, the portability claim, and the cache policy each one emits in its own format (#137). |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
@@ -241,13 +241,14 @@ Four are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each c
 `#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]`. They print the scaling
 survey rather than asserting on it, and are reports rather than gates.
 
-**`survey_emitter_growth` is the newest of the four (#8), and it is ignored for a second reason
-worth stating.** It times the emitter against the size of a view, and being wall-clock it cannot
-be a gate for the reason the other three cannot. But it is also the survey that found a cubic
-path scheduler no *deterministic* gate in this repository could have seen, because the walk the
-emitter schedules comes out byte-identical however long the scheduling takes. That is a gap this
-file should name rather than leave implied: the emitter's own cost is invisible to every byte
-count here, and a printed column is currently the only instrument that reports it.
+The sixth is `crates/zdc-bench/tests/asymptotics.rs`, and it is the one ignore here that is
+*not* optional: it is a timed sweep, it needs a release build to be measuring the emitter
+rather than the compiler's own missing inlining, and it costs tens of seconds. `#[ignore]` is
+what keeps it off every laptop's `cargo test`; `ci.yml`'s `asymptotics` job is what makes that
+different from nobody running it, which is the same arrangement `crates/zdc-cli/tests/
+browser.rs` has. It refuses to run at all on a debug build rather than returning early, because
+returning early is how `crates/zdc-lsp/tests/latency.rs`'s ten-millisecond budget came to be
+enforced by nothing.
 
 **The fourth this file used to name is gone.** It was in
 `crates/zdc-codegen/tests/emission.rs`, recording that `zdc check` accepted a program `zdc

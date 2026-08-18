@@ -9,6 +9,10 @@
 ```sh
 cargo test -p zdc-bench          # six to eight minutes; nothing else installed
 ZDC_BLESS=1 cargo test -p zdc-bench   # regenerate the table below
+
+# The one gate that is a clock rather than a count (#165). Release only,
+# `#[ignore]`d, and run by CI's `asymptotics` job.
+cargo test -p zdc-bench --release --test asymptotics -- --ignored --nocapture
 ```
 
 The workload is the standard js-framework-benchmark one: create 1,000 rows, replace them,
@@ -16,7 +20,10 @@ update every 10th, select a row, swap two, remove one, clear, create 10,000, app
 more, clear again.
 
 It is an ordinary workspace test, so CI's existing `cargo test --workspace` step runs it and
-fails on it; there is no separate benchmark job to forget to wire up. Dependencies are built at
+fails on it; there is no separate benchmark job to forget to wire up. The one exception is the
+timed sweep added by #165, which needs a release build to be measuring the emitter rather than
+the compiler's own missing inlining, and therefore does have a job of its own — see **What a
+count cannot see** below. Dependencies are built at
 `opt-level = 2` even in debug (`[profile.dev.package."*"]` in the root `Cargo.toml`) because
 the interpreter is otherwise slow enough that the suite could not be a gate at all.
 
@@ -963,10 +970,13 @@ top of this file are unaffected — they come from a workload that does not hit 
 ## The regression gates
 
 `tests/benchmark.rs` fails the build on all of the following. The counts are deterministic —
-there is no timing anywhere — so none of these can flake; the headroom exists so that a
+there is no timing in this table — so none of these can flake; the headroom exists so that a
 deliberate, harmless change to the row shape does not fail the build, while a change of
 architectural significance does. The golden table above is the exact-match gate: **any** change
 to **any** number fails until it is regenerated and reviewed.
+
+There is one gate that is *not* in this table and is not a count, and the reason for it is
+below under **What a count cannot see**.
 
 | Gate | Measured | Threshold | Why that threshold |
 |---|---|---|---|
@@ -1011,10 +1021,80 @@ charged to the programs that use one.
 **Measure a runtime addition against this gate before it lands, not after** — and that includes
 comments, because nothing in this pipeline strips them.
 
+### What a count cannot see (#165)
+
+Every gate above weighs output, and **a pass can become arbitrarily slower without changing one
+byte of it**. Issue #8 is the worked example rather than the hypothetical one: the emitter's
+path scheduler ran a breadth-first *search* for the shortest walk between two nodes of a binary
+tree — over a set with one element in it — once per node already named, which made scheduling
+cubic in the size of a region. Scheduling 1,025 view nodes took **1,866 ms**. The walk it
+scheduled came out byte-identical however long the scheduling took, so every gate in the table
+above passed, on every run, for as long as the code was in the tree.
+
+Nothing in this repository measured time in a way that could fail. `crates/zdc-bench/tests/
+asymptotics.rs` is that gate, and `.github/workflows/ci.yml`'s `asymptotics` job is what runs
+it.
+
+**It does not assert a time.** A wall-clock threshold on a runner nobody controls is a coin
+flip, and a flaky gate is worse than no gate — it teaches people to re-run until green, and
+then the run that was telling the truth gets re-run too. The evidence for that is in this
+repository: `crates/zdc-lsp/tests/latency.rs` holds analysis of a six-kilobyte file to ten
+milliseconds, concedes in its own comment that a ratio "would fail on a loaded machine and
+teach everyone to ignore it", and then guards the assertion with an early return on a debug
+build. CI builds in debug. **That budget has never once been enforced by CI.**
+
+What is asserted is the **shape**: over a 16× sweep of program size, how much the cost *per
+view node* changes between the small end and the large end. Call it the inflation.
+
+| what the pass is | inflation over a 16× sweep |
+|---|---|
+| linear | 1 |
+| `n log n` | 2.7 |
+| quadratic | 16 |
+| cubic | 256 |
+
+A runner that is uniformly twice as slow multiplies both ends by two, and two cancels in a
+ratio of two samples taken in one process on one machine seconds apart. What does not cancel is
+a pass whose cost per node grows with the program — which is exactly the class #8 belongs to
+and exactly the class no count here can see. The estimator is the **least** of several runs
+rather than the mean or the median, because interference on a shared machine only ever *adds*
+time to a sample: the uncontended cost is the minimum, and everything above it is that sample's
+noise rather than the pass's cost.
+
+Measured on this base, with `program_with_signals` — one `Column` of `n` `Text` nodes, which is
+the generator `survey_growth` above already sweeps to 1,024:
+
+| pass | 64 nodes | 1,024 nodes | inflation | recorded | fails past |
+|---|---|---|---|---|---|
+| front end | 3.5 µs/node | 5.3 µs/node | **1.5×** | 1.45 | 4.35 |
+| emitter | 13.7 µs/node | 1,752 µs/node | **127×** | 125 | 375 |
+
+The front-end row is what a healthy axis looks like. **The emitter row is a defect, recorded.**
+#8 is open on this base and `Graph::route` is still a breadth-first search; a gate that refused
+to write the number down would only be a permanently red build. What the recorded number buys
+today is that the emitter cannot get *worse* unnoticed. What it buys on the day #8 lands is a
+linearity gate, obtained by editing one number — and the gate fails from *below* as well, so
+that editing it is part of the change that earned it rather than something to get round to.
+That is the same discipline as regenerating the golden table.
+
+Five consecutive runs on one machine gave the emitter 122, 130, 138, 115 and 140, and the front
+end 1.44, 1.43, 1.44, 1.49 and 1.25 — about ±12%. The 3× band is not that spread with a safety
+factor bolted on; it is the smallest step that cannot be anything except a change in the order
+of growth, given that the readings a pass can have are 1, 2.7, 16 and 256.
+
+**The claim that a slow runner cancels is measured rather than argued.** The first CI run of
+this gate on `ubuntu-latest` was 1.7× slower in absolute terms than the machine the table above
+was recorded on — 7.6 µs a node against 3.5 for the front end, 23.6 against 13.7 for the
+emitter, and 2,845 ms against 1,793 at the largest point. The inflations it reported were
+**1.20 and 117.9**, both inside the local spread. The constant factor is precisely what a ratio
+of two samples divides out, which is what makes this a gate rather than a survey.
+
 ## What this suite still cannot tell you
 
-- Whether ZDeceptron is fast **in a browser**. Nothing here is timed, and nothing here runs in
-  one. The counts are necessary evidence, not sufficient.
+- Whether ZDeceptron is fast **in a browser**. Nothing *emitted* is timed, and nothing here
+  runs in one. The counts are necessary evidence, not sufficient. The one timed gate here
+  (#165) measures the compiler, which is Rust, and it asserts an order of growth rather than a
+  duration even then.
 - Whether §14A.2's "against SolidJS and Svelte 5 we expect parity" is true. It is untested and
   untestable in this environment.
 - Anything about §14A.1's monomorphic-shape claim. Hidden-class behaviour is a V8 property and

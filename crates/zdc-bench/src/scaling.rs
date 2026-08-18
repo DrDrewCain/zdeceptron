@@ -557,7 +557,11 @@ impl EmissionTime {
 /// the emitted bytes — the walk it schedules is the same walk however long
 /// the scheduling takes — so no byte-count gate in this file could see it
 /// and none ever did.
-pub fn time_emission(source: &str, name: &str, reps: u32) -> EmissionTime {
+/// Renamed from `time_emission` when #165's growth survey brought a
+/// second one: that one times a single pass against a budget and returns
+/// a `Duration`, this one repeats a pass `reps` times and returns the
+/// spread. Two measurements, two names.
+pub fn measure_emission(source: &str, name: &str, reps: u32) -> EmissionTime {
     use zdc_codegen::Options;
 
     let reps = reps.max(1);
