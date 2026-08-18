@@ -616,10 +616,29 @@ this file against an older copy can see which way each one went.
 
 The milestone-7 target is `/Users/msturman00/portfolio`.
 
-**Nothing about its expressibility has been measured on this tree, and this file will not quote
-a number as though it had been.**
+**It has now been measured, on a tree that exists. The full method, denominator and
+per-capability evidence are in [`EXPRESSIBILITY.md`](EXPRESSIBILITY.md); the numbers are:**
 
-The history is worth stating because it is the reason for that caution. Successive figures were
+| | |
+|---|---|
+| Target, ported | `~/zdc-portfolio` @ `8a79990` — 21 modules, 12,515 lines |
+| **On `fix/show-a-truth-in-this-languages-words` @ `363b9e7`** | **21 of 21 modules compile, 0 diagnostics, 33 documents emitted** |
+| **Original TypeScript covered** | **9,500 of 14,499 non-test lines — 65.5%** |
+| **On `origin/main` @ `8a99ff9`** | **0 of 21 modules compile, 358 diagnostics** |
+
+The two compiler rows are not a contradiction and the second is the more useful one. **All 358
+diagnostics `main` reports are one rule** — a line ended where the writer meant it to continue —
+closed by `ee63fe5`, which is on four branches and not on `main`. A measurement taken on `main`
+today would report 0.0% and would be true and useless, which is the shape of number this section
+was written to refuse. Six further language features separate the two compilers and
+`EXPRESSIBILITY.md` §4 names them.
+
+The port uses `static` (151), `client` (30) and `remembered` (4) and **reaches `server` and
+`durable` zero times**, so this target can rank browser work and cannot rank server work at all.
+
+The history below is kept, because the reason for the caution has not stopped being true.
+
+Successive figures were
 quoted as 0% expressible, then a projected 47.6%, then a "verified" 21.3% — and an audit
 established that **no figure ever quoted was measured on a tree that actually existed.** Each
 was either a measurement of a commit that had since moved on, or a projection over a *union* of
@@ -635,20 +654,15 @@ What is known, with provenance:
 | 0.0% strict / 2.4% degraded | **measured** | `feature/front-end` @ `387018f`, now many commits stale |
 | +4.9 points | **measured** | `feature/numeric` @ `e680dc2`, four hand-ported programs |
 | 16.4%, 21.3%, 24.2%, 47.6% | **projections** | no branch — a union of separately-verified compilers that has never been built |
-| This branch | **UNVERIFIED** | — |
+| 65.5% | **measured** | `363b9e7`, against `~/zdc-portfolio` @ `8a79990` — [`EXPRESSIBILITY.md`](EXPRESSIBILITY.md) |
+| `origin/main` @ `8a99ff9` | **measured** | 0.0%, and the reason is one lexical rule rather than any capability |
 
-**Why it is unverified here rather than measured:** the measurement needs a feature inventory of
-the target (the 49-feature decomposition and its 13,389-line denominator) and a probe corpus,
-neither of which is in this repository. Reproducing it means re-deriving the inventory and
-hand-porting against it — a substantial analysis, not a command. I did not do it, so I am not
-reporting a number for it.
-
-What can be said honestly: the mainline has since absorbed the element vocabulary (75
-built-ins), routing, event payloads, `static` placement, components and modules, and the
-standard library — which are between them the majority of the blockers those analyses named. The
-true figure is therefore **bounded below by the last real measurement and above by the
-projection**, and is unknown within that range. Measuring it is the single most useful
-unmeasured number about this project.
+**What the measurement does not use, and why the earlier ones could not be reproduced:** it does
+not re-derive the 49-feature decomposition or its 13,389-line denominator, because neither lives
+in this repository and neither can be checked. It uses the target's own module tree instead — 100
+non-test TypeScript modules, 14,499 lines — assigns every module to exactly one group, and
+asserts in the script that the groups partition the tree. A module either has a counterpart in
+the port or does not, and that judgement can be checked by reading two files.
 
 ---
 
