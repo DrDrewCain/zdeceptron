@@ -65,7 +65,13 @@ component RingChart with argument
 
     Column padding is 8
         Text argument
-        Meter share, least is 0, most is 100, low is 20, high is 80, best is 60, label is "share"
+        Meter share,
+            least is 0,
+            most is 100,
+            low is 20,
+            high is 80,
+            best is 60,
+            label is "share"
         Row
             Button "less"
                 on click
