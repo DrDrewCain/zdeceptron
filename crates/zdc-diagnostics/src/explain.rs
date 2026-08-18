@@ -281,6 +281,717 @@ Accepted — the literal is the prefix, and the parameter is declared:
         BlogPost is \"/blog\" with slug is Text in postSlugs",
     },
     Explanation {
+        code: "E0201",
+        caret: "this value is not the type this position takes",
+        name: "a value is not the type the position it sits in requires",
+        meaning: "Inference solved the program's equations and two of them disagree here.
+The type this expression produces is not the type the place it was
+written into accepts, and the message names both — what the value
+starts as, and what is expected — because either one of them can be
+the mistake.",
+        why: "§5.4's type system converts nothing on its own. That is the decision
+this diagnostic enforces and it is worth its friction: an implicit
+conversion is a rule you have to know in order to read a line, and it
+is nowhere in the line. `Whole` and `Decimal` are the pair that makes
+the point. A language that narrowed one to the other quietly would
+answer `3 / 2` with `1` in some positions and `1.5` in others, and
+neither number would be written anywhere in the program.
+
+The expectation usually comes from somewhere other than the caret: a
+`state` declaration's written type, a parameter's use further down its
+own function, an element's argument. The message names it rather than
+pointing at it, because the type it names is often not written in one
+place at all — it is what the rest of the program forced.",
+        example: "Rejected — `/` gives a `Decimal` whatever it divides, so the written
+type and the initialiser disagree:
+
+    state half is client Whole from 3 / 2
+
+Accepted — divide as whole numbers. `quotient` is `None` on a zero
+divisor, because a `Whole` is finite, so the `Option` is spent here:
+
+    state half is client Whole from valueOr with maybe is (quotient with value is 3, divisor is 2), fallback is 0",
+    },
+    Explanation {
+        code: "E0202",
+        caret: "this operand is outside the set the operator takes",
+        name: "an operator or built-in was given a type it does not accept",
+        meaning: "Each operator and each built-in accepts a closed set of operand types:
+`+` takes `Whole`, `Decimal` or `Text`; `<` takes a number; `at`
+indexes a `List`, a `Map` or a `Text`; `length of` and `contains` take
+a `Text`, a `List` or a `Map`. This one was given a type outside its
+set, and the message names the set rather than only the value.",
+        why: "There are no typeclasses and no operator overloading (§5.4), so what
+`+` means is fixed by the language rather than by what is to its left.
+The cost is real — there is no way to teach `+` about a `record` you
+declared, and a program that wants one writes a `function` with a name
+that says what it does. The benefit is that `a + b` means the same
+thing in every file, including files you did not write, and that
+reading an expression never requires first working out which
+implementation of an operator is in scope.
+
+The set is named in the message because the set is the part that is
+not in the source. Which types `contains` accepts is a fact about the
+language; which type this value has is a fact about the program, and
+the caret already points at that one.",
+        example: "Rejected — `contains` looks inside a collection or a text, and a
+`Truth` is neither:
+
+    state ok    is client Truth starting yes
+    state found is client Truth from ok contains \"x\"
+
+Accepted — ask the question of something that has things inside it:
+
+    state words is client List of Text starting [\"x\"]
+    state found is client Truth from words contains \"x\"",
+    },
+    Explanation {
+        code: "E0203",
+        caret: "this type would have to contain itself",
+        name: "a value would have to be a value that contains itself",
+        meaning: "Solving this expression's equations produced a type that appears
+inside its own definition — a list whose element type is that same
+list, and so on without end. This is the occurs check, and it is the
+one failure inference reports about its own arithmetic rather than
+about a written type.",
+        why: "A type is a finite description of a value's shape, and a value of an
+infinite type is a value nothing can build or print. Unification would
+loop forever constructing one, so the check is what makes inference
+terminate — the classic reason, and it holds here for the ordinary
+reason it holds anywhere.
+
+In practice this almost always means a name is being used at two
+depths at once: as a collection in one place and as one of its own
+elements in another. The repair is nearly always to introduce the
+second name rather than to change a type.",
+        example: "Rejected — `xs` would have to be both the list and one of its
+elements:
+
+    function grow with xs
+        give append xs to xs
+
+Accepted — the element is its own value, and the list holds it:
+
+    function grow with xs, item
+        give append item to xs",
+    },
+    Explanation {
+        code: "E0204",
+        caret: "nothing in the program settles what this is",
+        name: "nothing in the program says what type this is",
+        meaning: "The checker finished and this expression's type was still open. `at`,
+`contains`, `length of`, `map each … in`, `when` and `empty` each need
+to know *which* shape they are working on — a `Text` is indexed
+differently from a `Map` — and nothing anywhere in the program pinned
+this one down.",
+        why: "The alternative is a default, and every default here is a silent
+choice about what the code does. Guessing `List` for an `empty` that
+was meant to be a `Map` produces a program that compiles, runs, and is
+wrong in a way no diagnostic will ever mention again.
+
+Inference is deliberately whole-program rather than per-line (§5.4),
+so this is not a demand for annotations everywhere — most values need
+none, because some use somewhere settles them. It is the report that
+*no* use settled this one, which is why the repair is to write the
+type on the declaration the value comes from rather than at the caret.",
+        example: "Rejected — nothing anywhere says what `xs` is, so `length of` does not
+know what it is counting:
+
+    function sizeOf with xs
+        give length of xs
+
+Accepted — a call settles it, and the parameter needs no annotation of
+its own:
+
+    state words is client List of Text starting [\"a\", \"b\"]
+    state count is client Whole        from sizeOf with xs is words
+
+    function sizeOf with xs
+        give length of xs",
+    },
+    Explanation {
+        code: "E0210",
+        caret: "this value has no variants to take apart",
+        name: "`when` was given something that is not a choice",
+        meaning: "`when` takes apart a value that is one of several things: an `Option`,
+a `Remote`, a `Code`, or a `choice` this program declares. The value
+under the caret is none of those, so there are no variants to write
+arms for and the message names the ones there are.",
+        why: "`when` is the language's only elimination form, and it eliminates
+*sums* specifically. A `Whole` is not a sum: it has no variants, so no
+set of arms could be exhaustive over it and the construct has nothing
+to check. Branching on a condition is `if`,
+which is a different construct because it answers a different
+question — `if` asks whether something is so, `when` asks which of
+several things this is.
+
+Confusing the two usually means the value is not the one intended: a
+`server` signal read from the view is a `Remote of T` and takes a
+`when`, and the same signal read from a server derivation is a plain
+`T` and does not (§14G.1.4).",
+        example: "Rejected — a number is not one of several things:
+
+    state count is client Whole starting 0
+
+    view
+        Column
+            when count
+                Loading show Spinner
+
+Accepted — ask the yes-or-no question with the construct for it:
+
+    view
+        Column
+            if count > 0
+                Text \"some\"",
+    },
+    Explanation {
+        code: "E0211",
+        caret: "an arm is missing from this `when`",
+        name: "a `when` does not write an arm for every variant",
+        meaning: "Every variant of the choice gets an arm, and this `when` leaves at
+least one out. The message names the ones that are missing.",
+        why: "§14G.1.6 asks for all of them **in every context**, including arms the
+compiler can prove will never run. That last part is the deliberate
+one, and it is what makes a loading state impossible to forget: a
+`Remote` has three arms because a call over a network has three
+outcomes, and a program that writes only `Ready` is a program that
+renders nothing at all while the request is in flight and nothing at
+all when it fails. Those are the two states a user actually
+experiences on a bad connection, and they are exactly the two a
+language with an optional else-branch lets you skip.
+
+The unreachable-arm rule follows from the same argument in the other
+direction. If arms could be omitted when the compiler can prove them
+dead, then whether a program compiles would depend on how clever the
+prover was that week, and adding a variant to a `choice` would be a
+change whose consequences appear somewhere else entirely.",
+        example: "Rejected — nothing is drawn while the request is in flight:
+
+    view
+        Column
+            when quote
+                Ready with text show Text text
+
+Accepted — all three outcomes, each with something to draw:
+
+    view
+        Column
+            when quote
+                Loading         show Spinner
+                Failed with e   show ErrorBar message is e.message
+                Ready with text show Text text",
+    },
+    Explanation {
+        code: "E0212",
+        caret: "this arm does not name one variant with its fields",
+        name: "an arm does not match the choice it takes apart",
+        meaning: "An arm names one variant of the choice, once, and binds exactly the
+fields that variant carries, in the order they were declared. This one
+does not: it names a variant the choice does not have, it names one a
+previous arm already took, or it binds a number of names the variant
+has no fields for.",
+        why: "The three are one rule — an arm is a *pattern*, and a pattern that
+does not correspond to the shape it takes apart cannot be run. Naming
+a variant twice is worth reporting rather than accepting because the
+second arm can never run: the code is there, it looks like it does
+something, and it does nothing, which is the failure mode this
+language treats as a defect wherever it appears.
+
+The binders are positional and unnamed on purpose. A variant's fields
+are declared in an order, the arm restates that order, and there is
+nothing to keep in sync — where a name-per-field syntax would let an
+arm bind `title` to what the declaration calls `body` and typecheck.",
+        example: "Rejected — `Some` carries one field, and this binds two:
+
+    when found
+        Some with value, extra show Text value
+        None                   show Text \"none\"
+
+Accepted — one name per field the variant declares:
+
+    when found
+        Some with value show Text value
+        None            show Text \"none\"",
+    },
+    Explanation {
+        code: "E0220",
+        caret: "this argument list does not fill the declaration",
+        name: "a call does not fill the parameters the declaration names",
+        meaning: "A call fills every parameter the declaration lists, exactly once,
+positionally or by name. This one passes an argument for a parameter
+that does not exist, passes more arguments than there are parameters,
+or leaves one unfilled. The message names the parameters the
+declaration has.",
+        why: "There are no default arguments and no optional parameters, and both
+absences are the same decision. A default is a value written in the
+declaration and read at a call site that does not mention it, so the
+call no longer says what it does — and the reader who has to know the
+default is the reader least likely to have the declaration open.
+Filling every parameter costs a few characters at the call and buys a
+call site that can be read on its own.
+
+`with` names its arguments for the neighbouring reason (§4.4). A call
+with three positional arguments is a call whose meaning depends on an
+order written somewhere else, and swapping two of the same type is a
+mistake no compiler can catch. Naming them turns that into this
+diagnostic.",
+        example: "Rejected — the declaration has no `divisor`, and `n` is unfilled:
+
+    function halve with n
+        give n / 2
+
+    state half is client Decimal from halve with divisor is 2
+
+Accepted — the parameters the declaration names, each filled once:
+
+    state half is client Decimal from halve with n is 4",
+    },
+    Explanation {
+        code: "E0221",
+        caret: "this does not name every field exactly once",
+        name: "a record or variant was not built by naming every field once",
+        meaning: "A `record` and a variant that carries fields are built the same way:
+`Name with field is …, other is …`, naming every field the declaration
+lists, each of them once. This one leaves a field out, names one the
+declaration does not have, gives one twice, or writes the shape's name
+with no fields at all.",
+        why: "Every field is given a value because **there is no value in this
+language that stands for nothing**. There is no `null` and no
+`undefined`, so a half-built record is not a thing that could exist
+and be checked later — the language would have to invent a filler, and
+the filler would then be a value the program never wrote and every
+reader would have to know about.
+
+A field that may genuinely be absent is spelled `Option of T`, which
+is a different type and takes a `when`. That is more to write, once,
+at the declaration; the alternative is more to check, at every read.",
+        example: "Rejected — `Post` declares three fields and this names two:
+
+    record Post
+        slug  is Text
+        title is Text
+        draft is Truth
+
+    state first is client Post starting Post with slug is \"a\", title is \"A\"
+
+Accepted — every field named, including the one whose value happens to
+be the boring one:
+
+    state first is client Post starting Post with slug is \"a\", title is \"A\", draft is no",
+    },
+    Explanation {
+        code: "E0222",
+        caret: "this names a declaration rather than a value",
+        name: "a declaration was written where a value goes",
+        meaning: "The name under the caret resolves to a `function`, a `component`, a
+`record`, a `choice` or something else the program declared — not to a
+value. The message says which kind it is and how that kind is spelled
+where it *is* usable.",
+        why: "There are no first-class functions (§5.4), so a function's name is not
+a value that can be passed, stored or returned: it can only be called.
+That is a real limitation and it is written down rather than worked
+around, because the alternative — closures as values — brings a type
+system with higher-rank types and an escape analysis for the
+placements, and neither is in this language.
+
+The other kinds are refusals of a subtler mistake. A `record`'s name
+is a *shape*, and a shape is not one of its own instances; a
+`choice`'s name is a set of variants, and a set is not a member. Both
+mistakes read as though the program had a value, which is why the
+message names the spelling that would produce one.",
+        example: "Rejected — the name of a record is not a record:
+
+    record Post
+        slug is Text
+
+    state first is client Post starting Post
+
+Accepted — build one by naming its fields:
+
+    state first is client Post starting Post with slug is \"a\"",
+    },
+    Explanation {
+        code: "E0223",
+        caret: "this value has no field of that name",
+        name: "a field was read from a value that does not carry it",
+        meaning: "`.` reads a field of a `record`, of a variant's payload, of an event's
+payload, or of an `Error`. The value under the caret carries no field
+of this name, and the message lists the fields it does carry.",
+        why: "The set of fields is closed at the declaration, and there is no
+dynamic lookup: a name that is not a field is a mistake now rather
+than `undefined` later. The types that are not records are the
+interesting half of this rule. An event payload carries what the
+browser reports for *that* event and nothing else, which is why
+`press.key` reads on `keydown` and not on `click`; and an `Error`'s
+fields are a closed pair for §14G.1.3(d)'s sake, so that `e.code` — the
+browser's own account of the transport — is always available and
+`e.message` is not always.
+
+A `choice` is the one case where the message points somewhere else
+entirely: its variants are not fields, and the way in is `when`.",
+        example: "Rejected — `Todo` has no `name`:
+
+    record Todo
+        title is Text
+        done  is Truth
+
+    state first is client Todo starting Todo with title is \"a\", done is no
+
+    view
+        Column
+            Text first.name
+
+Accepted — a field the declaration lists:
+
+    view
+        Column
+            Text first.title",
+    },
+    Explanation {
+        code: "E0230",
+        caret: "this clause has no collection left to walk",
+        name: "a pipeline clause with nothing to walk",
+        meaning: "A pipeline starts with `from`, which names the collection, and each
+later clause walks what the one before it produced. This clause has no
+collection in front of it: either the pipeline never started with
+`from`, or a `fold each` already ended it.",
+        why: "`fold each` is the clause that turns a sequence into one value, so
+what follows it is not a sequence and there is nothing left to walk.
+The rule is stated as a property of the pipeline rather than left to
+whatever the runtime would do, because the alternative — a clause that
+quietly walks a one-element sequence — would make `fold each` mean two
+different things depending on what came after it.
+
+The `from`-first rule is what makes a pipeline readable top to bottom:
+the collection is named once, at the top, and every clause below is
+about that collection. A pipeline whose source could appear anywhere
+would have to be read backwards to find out what it was about.",
+        example: "Rejected — the fold has already produced one number:
+
+    function totalOf with xs
+        from xs
+        fold each x into sum starting 0 to sum + x
+        keep each x where x > 0
+
+Accepted — filter first, then fold:
+
+    function totalOf with xs
+        from xs
+        keep each x where x > 0
+        fold each x into sum starting 0 to sum + x",
+    },
+    Explanation {
+        code: "E0240",
+        caret: "this is not somewhere a value can be put",
+        name: "something was written to that is not a place",
+        meaning: "`set`, `add`, `subtract`, `append` and `remove` write into a place: a
+`state` signal that stores its value. The target here is not one — it
+is a derived signal, a clock, a variant, or the name of something that
+is not state at all — and the message says which.",
+        why: "A derived signal has one definition of where its value comes from, and
+that definition is its `from` clause. A write would give it a second,
+and the two would disagree the moment either input changed; which one
+won would depend on the order the graph happened to recompute in.
+Writing the input instead is not a workaround, it is the same
+operation expressed where the compiler can see it.
+
+A clock signal is refused for the sharper version of the same reason:
+its writer is the browser's scheduler, and a program that could also
+write it would be racing something with no rate it can predict.",
+        example: "Rejected — `doubled` is recomputed, so there is nothing to assign to:
+
+    state count   is client Whole starting 0
+    state doubled is client Whole from count * 2
+    ...
+        on click
+            set doubled to 10
+
+Accepted — write the input, and let the derivation follow:
+
+    on click
+        set count to 5",
+    },
+    Explanation {
+        code: "E0241",
+        caret: "this binding needs state it can write back to",
+        name: "an element that binds two ways was not given writable state",
+        meaning: "`Input`, `Checkbox`, `Slider` and the rest of the two-way elements
+write back into what they are given on every keystroke or click, so
+what they are given has to be a `state` signal that stores its value.
+This one was handed a computed value, a derived signal, or state on a
+placement the browser cannot write.",
+        why: "Two-way binding is the one place in the language where a *view node*
+is a writer, and the whole of its honesty rests on the target being
+somewhere a write can land. A computed value would take the keystroke
+and drop it, which is the failure this compiler treats as a defect
+wherever it appears: the field would look like it worked, and the
+character would be gone by the next repaint.
+
+The placement half is a different point. A `server` or `durable`
+signal is not in the browser, so binding a field straight to one would
+hide a network round trip inside a keystroke — one request per
+character, with no place in the source that says so. Binding a
+`client` signal and writing the remote one from a handler puts the
+round trip where it can be read (§14B.5).",
+        example: "Rejected — a derived signal cannot take the keystroke:
+
+    state name  is client Text starting \"\"
+    state shout is client Text from uppercase of name
+
+    view
+        Input shout
+
+Accepted — bind the signal that stores, and derive from it:
+
+    view
+        Column
+            Input name
+            Text shout",
+    },
+    Explanation {
+        code: "E0250",
+        caret: "this state cannot be reached from here",
+        name: "state was read from a context that cannot reach it",
+        meaning: "Where a signal lives decides who can read it, and this read is from
+somewhere that cannot. The message names the placement and the reason
+— the build host has no browser, a trigger has no session, and so on
+— rather than only saying no.",
+        why: "This is §14G.1.4's table, enforced. Placement is not a hint about
+performance: the four placements are four machines, and a read that
+crosses between them either becomes a network call with a type that
+says so (`Remote of T`) or is impossible. This code is the second
+case, and it is reported by the type checker because the *type* of a
+read is what changes across the boundary.
+
+Reporting it here rather than at code generation is what makes the
+answer a compile error instead of a value that is `undefined` in a
+browser somebody else is using.",
+        example: "Accepted — cross the boundary explicitly, in a `server` signal the
+view asks for, and spend the `Remote` with a `when`:
+
+    state query   is client Text         starting \"\"
+    state matches is server List of Item from search with query",
+    },
+    Explanation {
+        code: "E0260",
+        caret: "this is not what the element takes",
+        name: "an element was given arguments it does not take",
+        meaning: "Every element declares what it takes: how many leading values, which
+named arguments, and — for the ones that bind two ways — what type the
+state it binds must have. This one was given something else. The
+message names what the element takes; the caret is on what was
+written.",
+        why: "The element vocabulary is a closed set with a fixed shape per element
+(§14D), and the shape is what lets the view be read without a
+component library open beside it. `Text` leads with the value it
+shows, `Link` leads with where it goes and nests what it shows, and
+`NumberInput` binds an `Option of Whole` because an empty field holds
+no number at all and the state it writes has to have somewhere to put
+that.
+
+That last one is worth stating, because it is the rule that looks like
+pedantry and is not. A number field that bound a plain `Whole` would
+have to invent a value for the moment the reader clears it — zero,
+usually — and a form that silently reads zero when somebody meant to
+type nothing is a bug that reaches production in every framework that
+allows it.",
+        example: "Rejected — an empty field holds no number, so a plain `Whole` has
+nowhere to put that:
+
+    state age is client Whole starting 0
+
+    view
+        NumberInput age
+
+Accepted — the absence is in the type, and the view spends it:
+
+    state age is client Option of Whole starting None
+
+    view
+        NumberInput age",
+    },
+    Explanation {
+        code: "E0270",
+        caret: "the boundary cannot carry this type",
+        name: "a `foreign` declaration promises something the boundary cannot carry",
+        meaning: "A `foreign` declaration is a promise about JavaScript the compiler
+cannot read: what the imported symbol takes, and what it gives. This
+declaration writes a type the boundary has no representation for —
+either a `gives new` whose type is not `Handle`, or a parameter of a
+`gives view` foreign whose type has no plain JavaScript form.",
+        why: "§14E.3 makes the FFI a hole in the type system deliberately: what
+comes back is whatever the JavaScript returns, and the declaration is
+the audit surface. A hole is only usable if its edges are exact, which
+is what this rule keeps true. `new` builds a host object, and the
+language's name for a host object is `Handle` — writing any other type
+there would be a promise the compiler cannot check *and* cannot even
+state, because there is nothing about a constructed JavaScript object
+that corresponds to a `record` this program declared.
+
+The `gives view` case is the same argument about arguments. A view
+foreign is handed plain JavaScript values, so its parameters are
+`Text`, `Whole`, `Decimal`, `Truth`, or a `List` of one of those.
+Anything else would need a marshalling rule, and a marshalling rule
+the compiler invented would be invisible in the declaration that is
+supposed to be the whole of the contract.",
+        example: "Rejected — `new` gives a host object, and `Scene` is not a type this
+language has:
+
+    foreign newScene is client
+        from  \"three\" as \"Scene\"
+        gives new Scene
+
+Accepted — the language's name for a host object:
+
+    foreign newScene is client
+        from  \"three\" as \"Scene\"
+        gives new Handle",
+    },
+    Explanation {
+        code: "E0271",
+        caret: "this owns a node, so it is not a value",
+        name: "a view `foreign` was used as a value, or given children",
+        meaning: "A `foreign … gives view` mounts a DOM node and owns it. It is written
+as a view element and hands back no value, so it cannot be called for
+a result, and nothing may be nested underneath it.",
+        why: "Ownership is the whole of what `gives view` declares. The module is
+handed a node, it does what it likes inside — a canvas, a chart, a
+map — and the compiler stops reasoning about that subtree entirely.
+Nesting a ZDeceptron node under it would put two owners on one region
+of the DOM, and the loser would be whichever one wrote last, which is
+a race with no rate anybody can predict.
+
+Calling it for a value is the same confusion the other way round. The
+declaration says the result is a *view*; there is no value to give
+back, so an expression that used one would be reading whatever the
+module happened to return, which is exactly what §14E.3's hole is
+bounded to prevent.",
+        example: "Rejected — the module owns the node, so nothing goes under it:
+
+    foreign Gauge is client
+        from  \"./gauge.js\" as \"mount\"
+        takes value is Decimal
+        gives view
+
+    view
+        Column
+            Gauge value is 0.5
+                Text \"inside\"
+
+Accepted — the element on its own, and anything else beside it:
+
+    view
+        Column
+            Gauge value is 0.5
+            Text \"beside\"",
+    },
+    Explanation {
+        code: "E0272",
+        caret: "this call gives a value, and `do` discards nothing",
+        name: "`do` was given a call that gives a value",
+        meaning: "`do` runs a call for its effect. It is written for a `foreign … gives
+nothing` — an imperative JavaScript call with no result — and this one
+gives a value.",
+        why: "A statement that quietly threw a result away would be the one place in
+this language where a computed value can vanish with nothing said
+about it. Every other construct puts its result somewhere a reader can
+see: a `give`, a `state` declaration, an argument. `do` exists
+precisely because a `gives nothing` foreign has no result to put
+anywhere, and widening it to \"any call, result discarded\" would turn
+it into the general-purpose sink that makes a dropped return value
+invisible.
+
+If the result is genuinely not wanted, that is a fact about the
+`foreign` declaration — write `gives nothing` there, where a reviewer
+reading the boundary can see it.",
+        example: "Rejected — the declaration gives a value, so `do` is not how it is
+spent:
+
+    foreign store is client
+        from  \"./db.js\" as \"put\"
+        takes key is Text
+        gives Text
+
+    do store with key is \"a\"
+
+Accepted — declare what is true of the JavaScript, and `do` fits:
+
+    foreign store is client
+        from  \"./db.js\" as \"put\"
+        takes key is Text
+        gives nothing",
+    },
+    Explanation {
+        code: "E0280",
+        caret: "some path through this function reaches no `give`",
+        name: "a function does not give a value on every path",
+        meaning: "Every path through a function must reach a `give`. This one has a path
+that runs off the end — usually an `if` with no `otherwise` and no
+final `give` after it.",
+        why: "There is no value in this language that stands for nothing, so there
+is nothing for a function to return when it falls off the end. Other
+languages fill the gap with `undefined`, `nil` or `None`, and the cost
+is paid by every caller: the result of a call is a value *or* the
+absence of one, forever, and the check for that absence is the
+programmer's to remember.
+
+A function that really may not have an answer says so in its type by
+giving an `Option of T`, which the caller then has to take apart with
+`when`. That is the same information, written where the caller reads
+it rather than discovered where the caller does not.",
+        example: "Rejected — nothing is given when the number is zero or less:
+
+    function adviceFor with count
+        if count > 0
+            give \"something waiting\"
+
+Accepted — a final `give` the fall-through reaches:
+
+    function adviceFor with count
+        if count > 0
+            give \"something waiting\"
+        give \"nothing waiting\"",
+    },
+    Explanation {
+        code: "E0290",
+        caret: "the browser does not report this",
+        name: "an `on` handler names an event, key or payload that does not exist",
+        meaning: "`on` names one of a closed set of events, and each event has a payload
+the compiler knows the fields of. This handler names an event that is
+not in the set, a key the browser never reports, or binds a payload
+from an event that carries none.",
+        why: "The set is closed so that every payload has a field list and a
+provenance. A field list is what makes `press.key` a compile-time read
+rather than a lookup that may be `undefined`, and a provenance is what
+lets the integrity pass know that everything in an event payload was
+chosen by a browser (§18.1). Adding an event is therefore a row in the
+compiler's table — a name, its fields, and their labels — and not a
+spelling that passes through.
+
+Key names are checked against what a browser actually reports, for a
+narrower reason: a handler on a key that does not exist is not a
+compile error in any other framework, it is a feature that silently
+never fires, and the programmer finds out from a user.",
+        example: "Rejected — the browser has no `hover` event, so this handler could
+never run:
+
+    Button \"go\"
+        on hover
+            set lit to yes
+
+Accepted — one of the events the message lists, and the payload bound
+where the event has one:
+
+    Button \"go\"
+        on click
+            set lit to yes
+
+    Input typed
+        on keydown with press
+            set last to press.key",
+    },
+    Explanation {
         code: "E0301",
         caret: "this read runs at build time",
         name: "build-time state read something that does not exist at build time",

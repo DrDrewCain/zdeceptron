@@ -5,14 +5,21 @@
 //! the day it was written and wrong on the day someone added a code, which
 //! is exactly the day the test needed to fail.
 //!
-//! Three crates produce codes and all three are scanned. `zdc-parser`
-//! reports syntax (§4.1's `E01…`); `zdc-graph` reports placement, secrecy,
-//! integrity (§18.1's `E-INT-…`) and declassification (§19's `E-REL-…`);
-//! `zdc-types` reports types and routing. Scanning only the first two is
-//! how four codes once reached a release with no `zdc explain` entry behind
-//! them, and scanning for only *some* of the prefixes is how the `E-REL-…`
-//! family reached one — the shape test below is the fix, so it must list
-//! every prefix the spec uses.
+//! Four crates produce codes and all four are scanned. `zdc-parser`
+//! reports syntax (§4.1's `E01…`); `zdc-types` reports types (§5.4's
+//! `E02…`); `zdc-graph` reports placement, secrecy, integrity (§18.1's
+//! `E-INT-…`) and declassification (§19's `E-REL-…`); `zdc-codegen`
+//! reports on a program by running it (`E-TEST-…`). Scanning only some of
+//! them is how four codes once reached a release with no `zdc explain`
+//! entry behind them, and scanning for only *some* of the prefixes is how
+//! the `E-REL-…` family reached one — the shape test below is the fix, so
+//! it must list every prefix the spec uses.
+//!
+//! The sentence above said *three* crates until #148, while the list below
+//! it named four: `zdc-codegen` joined with `zdc test` and the prose was
+//! not re-counted. That is the same class of mistake as a stale code list,
+//! in the file whose whole argument is that a hand-maintained figure goes
+//! wrong on the day somebody adds to it.
 //!
 //! `zdc-parser` was added when parse errors gained codes. The gate is what
 //! makes that stick: the family cannot lose its explanations, and a

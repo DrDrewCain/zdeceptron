@@ -27,6 +27,7 @@ fn type_error_conversion_preserves_its_actionable_help() {
         message: "expected Text, found Whole".into(),
         span: Span::new(12, 17),
         help: Some("Convert the number with `text of`.".into()),
+        code: None,
     };
 
     let diagnostic = Diagnostic::from(error);
@@ -39,6 +40,75 @@ fn type_error_conversion_preserves_its_actionable_help() {
     );
     assert!(diagnostic.notes.is_empty());
     assert_eq!(diagnostic.code, None);
+}
+
+/// A coded type error reaches a reader the way a coded graph finding does:
+/// the code ahead of the claim, the caret label read from the rule, and the
+/// pointer to `zdc explain` as the help line.
+///
+/// Asserted over **every** code rather than over one, because the property
+/// is of the conversion and not of any family: a code that reached a
+/// `TypeError` without an explanation behind it would produce a diagnostic
+/// pointing at a page that does not exist.
+///
+/// The iterations are counted, because every assertion here is inside the
+/// loop and a loop over an empty list asserts nothing at all. The floor is
+/// deliberately far below the table's size: this test is about the
+/// conversion, and `every_explanation_code_has_the_same_generated_inline_help`
+/// below is the one that pins the exact count.
+#[test]
+fn a_coded_type_error_carries_its_code_its_caret_and_the_pointer() {
+    let mut checked = 0;
+    for code in explain::codes() {
+        let error = zdc_types::TypeError {
+            message: "the claim, in one sentence.".into(),
+            span: Span::new(12, 17),
+            help: None,
+            code: Some(code),
+        };
+
+        let diagnostic = Diagnostic::from(error);
+
+        assert_eq!(
+            diagnostic.message,
+            format!("[{code}] the claim, in one sentence.")
+        );
+        assert_eq!(diagnostic.code, Some(code));
+        assert_eq!(
+            diagnostic.help,
+            Some(format!("run 'zdc explain {code}' for the rule")),
+            "{code}"
+        );
+        assert_eq!(diagnostic.label.as_deref(), explain::caret(code), "{code}");
+        assert!(diagnostic.label.is_some(), "{code}'s caret says nothing");
+        checked += 1;
+    }
+    assert!(
+        checked >= 40,
+        "the code list stopped being enumerated, so the assertions above ran \
+         {checked} times and established nothing"
+    );
+}
+
+/// A site whose repair names something in *this* file keeps its own help.
+/// The code still reaches the reader, because it is on the message.
+#[test]
+fn a_coded_type_error_with_a_local_repair_keeps_it() {
+    let error = zdc_types::TypeError {
+        message: "`clik` is not an event the language knows.".into(),
+        span: Span::new(0, 4),
+        help: Some("Did you mean `click`?".into()),
+        code: Some("E0103"),
+    };
+
+    let diagnostic = Diagnostic::from(error);
+
+    assert_eq!(diagnostic.help.as_deref(), Some("Did you mean `click`?"));
+    assert!(
+        diagnostic.message.starts_with("[E0103] "),
+        "{}",
+        diagnostic.message
+    );
 }
 
 #[test]
@@ -89,9 +159,10 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
-    // 49 before the outbound request. `E0363` — a request reached from
-    // outside the browser — is the new one (#19).
-    assert_eq!(codes.len(), 50, "the explanation table changed size");
+    // 50 before the type family. The twenty-one `E02xx` codes are the new
+    // ones (#148): the type errors could not be looked up at all until
+    // `TypeError` carried a code.
+    assert_eq!(codes.len(), 71, "the explanation table changed size");
     for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));

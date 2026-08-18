@@ -207,7 +207,10 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
-the total had grown from about 1,546 to 2,661.
+the total had grown from about 1,546 to 2,661. The per-crate rows below are gated against the tree, so their sum is the
+workspace total and can be re-added at any time. It is deliberately not
+written out here: it moved by fifty-three in the four merges it took to
+land this branch, and a total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -225,7 +228,7 @@ the total had grown from about 1,546 to 2,661.
 | `zdc-bench` | 51 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
 | `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
-| `zdc-diagnostics` | 62 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 75 | Two of these run the JavaScript suites — further assertions the count above does not see. |

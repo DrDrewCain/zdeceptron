@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 50 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 71 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -1735,13 +1735,14 @@ implies. `examples/parts.zd` is the whole of it, running.
 
 Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
-and an accepted example. 45 are written out: 42 errors and three warnings.
+and an accepted example. 71 are written out: 68 errors and three warnings.
 
-The families:
+The families, in pipeline order:
 
 | prefix | |
 |---|---|
 | `E01xx` | syntax and layout |
+| `E02xx` | types |
 | `E03xx` | placement and the signal graph |
 | `E-IFC-xx` | secrecy |
 | `E-INT-xx` | integrity |
@@ -1753,10 +1754,23 @@ The explanations are hand-written rather than generated, because hand-written
 expert explanations were measured to beat both conventional compiler messages
 and generated ones on time-to-fix and on satisfaction.
 
-Type errors do not yet carry codes — issue #148 — and warnings are not yet
-separated from errors by level — issue #154. Diagnostics are not yet
-available as JSON (issue #152), and the parser stops at the first error
-rather than recovering (issue #151).
+The type family lands with issue #148. Its decades group the way the
+placement family's do: `E020x` is inference proper, `E021x` is `when`,
+`E022x` is names, calls and construction, `E023x` pipelines, `E024x` writes,
+`E025x` reads across a placement boundary, `E026x` the view, `E027x` the
+JavaScript boundary, `E028x` a function's own shape, and `E029x` events.
+
+**Two kinds of type diagnostic still have no code.** The routing rules in
+`crates/zdc-types/src/routing.rs` — the URL bijection, route-parameter
+enumerability, `Link` written as a literal URL, and the immutability of a
+signal initialised from `address` — are a family about URLs rather than
+about types, and are the stated remainder of #148. So is the one message
+that reports the compiler's own prelude is incomplete, which is not a rule a
+program can break.
+
+Warnings are not yet separated from errors by level — issue #154.
+Diagnostics are not yet available as JSON (issue #152), and the parser stops
+at the first error rather than recovering (issue #151).
 
 ---
 
