@@ -1,3 +1,8 @@
+// The published site documents private items — `docs.yml` passes
+// `--document-private-items` and argues why — so a link from these docs
+// to a private helper resolves there. Same ruling as `minify`'s.
+#![allow(rustdoc::private_intra_doc_links)]
+
 //! Information flow — spec §17.3, correcting §5.3 via §14G.1.3.
 //!
 //! §5.3 says taint "propagates through every data dependency" and claims

@@ -1,3 +1,8 @@
+// The published site documents private items — `docs.yml` passes
+// `--document-private-items` and argues why — so a link from these docs
+// to a private helper resolves there. Same ruling as `minify`'s.
+#![allow(rustdoc::private_intra_doc_links)]
+
 //! The asset directory: how a real stylesheet reaches a build.
 //!
 //! §6.1 argues that `class is "…"` makes existing CSS frameworks work, and

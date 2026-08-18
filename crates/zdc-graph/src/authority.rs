@@ -728,7 +728,7 @@ impl Analysis {
     /// path of every command rather than of the one that asks for it.
     ///
     /// `report.json` is that command — `zdc build --report`, see
-    /// [`crate::report`] — and it is built from the HIR rather than from
+    /// [`crate::report()`] — and it is built from the HIR rather than from
     /// what is dropped here, because what a `foreign` claims about its
     /// result is a constant of its declaration. §21.6 item 18 forbade
     /// shipping the report's *framing* before the claim question was
