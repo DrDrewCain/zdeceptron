@@ -1989,6 +1989,34 @@ impl<'a, 'b> Walk<'a, 'b> {
         if matches!(self.ifc.hir.defs[def].kind, DefKind::Foreign(_)) {
             return self.foreign(def, args);
         }
+        // **A `release`, which is the one call a reader reaches for on
+        // purpose when a secret has refused to go somewhere.**
+        //
+        // Its value is the join of its arguments, which is what
+        // `constructed` computes and is the conservative answer: §19's
+        // construct does not declassify, so a secret argument makes a
+        // secret result exactly as an ordinary call would. That much was
+        // already right.
+        //
+        // What was missing is saying so. Two language models given the
+        // manual and this compiler both hit `E-IFC-02`, both read §11's
+        // "Declassification" heading, both wrote a `release` — and both
+        // got back a diagnostic identical to the one for an ordinary
+        // function, which never mentioned that a release was involved or
+        // that it does not do the thing they wanted (#360). The compiler
+        // has the callee in hand at exactly that moment.
+        if matches!(self.ifc.hir.defs[def].kind, DefKind::Release(_)) {
+            let mut value = self.constructed(args);
+            value.trace.push((
+                span,
+                format!(
+                    "`{}` is a `release`, and a release does not declassify yet — the secret \
+                     reaches the result exactly as an ordinary call's would",
+                    self.ifc.hir.defs[def].name
+                ),
+            ));
+            return value;
+        }
         // A record literal is `Todo with …`, which parses as a call.
         let DefKind::Function(function) = &self.ifc.hir.defs[def].kind else {
             return self.constructed(args);

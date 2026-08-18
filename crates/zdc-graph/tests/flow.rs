@@ -2757,3 +2757,68 @@ view
         "a job writing a secret into a secret store is the accepted program: {reported:?}"
     );
 }
+
+/// **A `release` is named in the path, at the moment a reader has just
+/// written one** (#360).
+///
+/// The construct is what §11 files under "Declassification", so it is
+/// what a reader reaches for when a secret has refused to go where they
+/// wanted. It does not declassify, and the diagnostic used to be
+/// identical to an ordinary function's — the trace stepped through the
+/// call without mentioning that a release was in it.
+///
+/// Two language models given the manual and this compiler both took that
+/// route, and both spent an attempt on it. The compiler has the callee in
+/// hand; this is it saying so.
+#[test]
+fn the_path_says_a_release_is_a_release() {
+    let source = "\
+secret state apiKey is server Text from environment \"API_KEY\"
+state guess is client Text starting \"\"
+state result is server Truth from judge with guess, key is apiKey
+
+release judge with guess, key
+    gives Truth
+    trusted guess
+    trusted key
+    give guess is key
+
+view
+    Column
+        Input guess, hint is \"g\"
+        when result
+            Loading show Text \"...\"
+            Failed with e show Text \"no\"
+            Ready with v show Text (text of v)
+";
+    let (_, _, verdict) = verdict(source);
+    let error = verdict
+        .errors()
+        .find(|e| e.code == "E-IFC-02")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected the derivation to be refused; got {:?}",
+                verdict
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.rendered_message())
+                    .collect::<Vec<_>>()
+            )
+        });
+
+    let path: Vec<&str> = error.notes.iter().map(|(_, note)| note.as_str()).collect();
+    assert!(
+        path.iter().any(|note| note.contains("is a `release`")),
+        "the path must say a release was involved: {path:?}"
+    );
+    assert!(
+        path.iter().any(|note| note.contains("does not declassify")),
+        "and that it does not do the thing the reader reached for it to do: {path:?}"
+    );
+    // The chain still starts where it did — the note is added to the
+    // provenance, not substituted for it.
+    assert!(
+        path.iter().any(|note| note.contains("declared secret")),
+        "the path must still begin at the declaration: {path:?}"
+    );
+}

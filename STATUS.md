@@ -221,7 +221,7 @@ total in prose is a number nobody re-derives.
 | `zdc-codegen` | 956 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 234 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
-| `zdc-graph` | 230 | Including the information-flow negative suite and the failure channel. |
+| `zdc-graph` | 231 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
