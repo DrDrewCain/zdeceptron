@@ -16,10 +16,17 @@
 //! ```
 
 use zdc_bench::{
+<<<<<<< HEAD
     build, deepest_fold, linked_runtime_bytes_in, linked_runtime_bytes_with_assertions,
     program_with_components, program_with_depth, program_with_roots, program_with_signals,
     program_without_components, runtime_js_bytes, survey, template_bytes, time_graph_passes,
     try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
+=======
+    build, deepest_fold, endpoint_duplication, linked_runtime_bytes_in, program_with_components,
+    program_with_depth, program_with_roots, program_with_shared_endpoints, program_with_signals,
+    program_without_components, repository_path, runtime_js_bytes, survey, template_bytes,
+    time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
+>>>>>>> c5bf8e0 (Gate the growth curve, so the number cannot rot unnoticed)
     SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
 };
 
@@ -643,4 +650,253 @@ fn identical_component_bodies_are_each_written_out_in_full() {
         "{duplicated} of {markup} bytes are copies. BENCHMARKS.md reports this as 95% of the \
          markup; below 90% the sentence is wrong."
     );
+}
+
+// --- one bundle per root (spec §17.7, §16.3.12 rule 3, issue #23) ---------
+//
+// §17.7 emits one function bundle per server root, and §16.3.12 invariant 4
+// forbids a bundle from importing a generated module — a shared generated
+// module is exactly the import edge that would make the tier split
+// analysable only by reading `import` statements, so "no cross-module
+// imports" is the *syntactic evidence* for the invariant rather than an
+// accident of the emitter. The price is that anything two roots both reach
+// is written into both files.
+//
+// Issue #23 states the price and says no number exists for it: *"a server
+// signal read by five endpoint derivations is recomputed inside all five
+// bundles. A helper reachable from twenty endpoints is emitted twenty
+// times."* These gates are the number. They measure; they do not fix, and
+// the trade is not one an optimisation could make on its own — invariant 4
+// is an information-flow property and the bytes are what it costs.
+
+/// The mechanism, before the bytes: every bundle carries the whole of what
+/// it reaches, and recomputes the shared signal itself.
+///
+/// This is the claim #23 makes, asserted rather than described. Five
+/// endpoints read one server signal `shared`; all five files compute it, and
+/// all five carry the helper that computes it. Nothing in the five imports
+/// anything, which is the invariant the duplication is buying and is checked
+/// here so that a later change cannot buy back the bytes by quietly
+/// forfeiting it.
+#[test]
+fn every_endpoint_carries_and_recomputes_what_it_shares() {
+    let source = program_with_shared_endpoints(1, 5, false);
+    let bundle = try_compile(&source, "shared.zd").expect("a shared-endpoint program builds");
+    assert_eq!(bundle.functions.len(), 5, "one file per endpoint");
+
+    for function in &bundle.functions {
+        assert!(
+            function.source.contains("function w0("),
+            "{} does not carry the helper it reaches:\n{}",
+            function.path,
+            function.source
+        );
+        assert!(
+            function.source.contains("const shared = "),
+            "{} does not recompute the shared signal:\n{}",
+            function.path,
+            function.source
+        );
+        // §16.3.12 assertion A and invariant 4, as a property of the bytes.
+        // If this ever fails, the duplication below has been traded for the
+        // import edge rather than for anything else, and that is a decision
+        // about the invariant and not a size win.
+        assert!(
+            !function.source.contains("import "),
+            "{} imports a module; invariant 4 is what the duplication buys:\n{}",
+            function.path,
+            function.source
+        );
+    }
+}
+
+/// **The growth curve.** Duplication is linear in the number of endpoints,
+/// exactly: each further endpoint costs one more whole copy.
+///
+/// One size cannot tell a constant from a slope, so this asserts the law at
+/// five sizes spanning 20×, the way `a reorder's move count against the
+/// list's length` does. The law is `dup(N) = (N - 1) x dup(2)` and it holds
+/// to the byte, which is what makes "emitted twenty times" a description of
+/// the emitter rather than a figure of speech.
+///
+/// Both arms are checked because they bound the answer from either side: the
+/// arithmetic arm shares only an author's helper, the collection arm shares
+/// the emitter's own intrinsics as well, and the slope is the size of what
+/// is shared in both.
+#[test]
+fn cross_root_duplication_is_one_further_copy_per_endpoint() {
+    for collections in [false, true] {
+        let of = |endpoints| {
+            endpoint_duplication(
+                &program_with_shared_endpoints(1, endpoints, collections),
+                "shared.zd",
+            )
+        };
+        let one = of(1);
+        assert_eq!(
+            one.duplicated, 0,
+            "a program with a single endpoint duplicates nothing; there is nothing to duplicate \
+             against"
+        );
+
+        let slope = of(2).duplicated;
+        assert!(slope > 0, "two endpoints must share something");
+        for endpoints in [5usize, 10, 20, 40] {
+            let measured = of(endpoints);
+            assert_eq!(
+                measured.duplicated,
+                (endpoints - 1) * slope,
+                "{endpoints} endpoints (collections {collections}) duplicated {} bytes against \
+                 the {} that one more whole copy each predicts. Any gap means the emitter has \
+                 started sharing — or specialising — something across roots, and BENCHMARKS.md's \
+                 growth curve is describing an emitter that no longer exists.",
+                measured.duplicated,
+                (endpoints - 1) * slope
+            );
+        }
+    }
+}
+
+/// What is duplicated is mostly **the emitter's own machinery**, not the
+/// program's.
+///
+/// The figures `BENCHMARKS.md` quotes, pinned so that neither the prose nor
+/// the emitter can move without the other. An endpoint that touches a
+/// `durable` list keyed by a `durable` map — `examples/voting-board.zd`'s
+/// shape — is 2,282 bytes, and 1,569 of them are the collection intrinsics
+/// the emitter inlines because invariant 4 leaves it nowhere else to put
+/// them. Forty bytes of the file are about this endpoint.
+///
+/// This is the server-side twin of #136's finding that a routed site's real
+/// per-page duplication was `base.css` rather than the modules: in both
+/// halves of the compiler the bytes written twice are the shared machinery,
+/// and in both halves the author's own code is the small part.
+#[test]
+fn a_collection_endpoint_duplicates_the_emitters_intrinsics() {
+    let source = program_with_shared_endpoints(1, 2, true);
+    let bundle = try_compile(&source, "shared.zd").expect("builds");
+    let first = &bundle.functions[0].source;
+
+    // The intrinsics run, from the first one the emitter writes to the
+    // first line of the program's own code after them.
+    let start = first
+        .find("const variant")
+        .expect("the variant constructor");
+    let end = first.find("function w0").expect("the program's own helper");
+    assert_eq!(
+        end - start,
+        1_569,
+        "bytes of collection intrinsics per bundle"
+    );
+    assert_eq!(first.len(), 2_282, "one endpoint bundle");
+
+    let measured = endpoint_duplication(&source, "shared.zd");
+    assert_eq!(measured.total, 4_564, "both bundles");
+    assert_eq!(
+        measured.duplicated, 2_242,
+        "bytes the second bundle repeats"
+    );
+    assert_eq!(
+        measured.total - measured.duplicated - first.len(),
+        40,
+        "bytes of the second bundle that are about the second endpoint"
+    );
+    assert!(
+        measured.percent() > 49.0,
+        "BENCHMARKS.md reports two collection endpoints as half a copy of each other; measured \
+         {:.1}%",
+        measured.percent()
+    );
+}
+
+/// **And today it is free**, which is the other half of the answer #23 asks
+/// for and the half that decides whether anything should be done.
+///
+/// No example in this repository has two endpoints that share a helper. The
+/// three that emit endpoints at all duplicate their generated header and
+/// almost nothing else, so the whole cost of per-root emission across every
+/// program that exists is a few hundred bytes.
+///
+/// Bounded above *and* below. Above, because a program that started sharing
+/// real code across roots would make the prose in `BENCHMARKS.md` wrong;
+/// below, because if this ever reaches zero the header has stopped being
+/// written and the measurement is no longer measuring anything.
+#[test]
+fn the_endpoints_that_exist_today_duplicate_their_header_and_little_else() {
+    for (name, bundles, duplicated) in [
+        ("examples/guestbook.zd", 3usize, 296usize),
+        ("examples/tally.zd", 2, 144),
+        ("examples/voting-board.zd", 2, 151),
+    ] {
+        let source = std::fs::read_to_string(repository_path(name)).expect("an example");
+        let measured = endpoint_duplication(&source, name);
+        assert_eq!(measured.bundles, bundles, "{name}");
+        assert_eq!(
+            measured.duplicated, duplicated,
+            "{name} duplicates {} bytes across its {} endpoint bundles. BENCHMARKS.md says the \
+             examples that exist duplicate their header and nothing else; a number that has \
+             moved means either the emitter shares more now or an example grew a helper two \
+             endpoints reach, and the second is the program #23 asks for.",
+            measured.duplicated, measured.bundles
+        );
+        // The header is what a bundle opens with, and on these programs it
+        // is all they have in common.
+        assert!(
+            measured.common_prefix < 200,
+            "{name}'s bundles share a {} byte prefix, which is more than a header",
+            measured.common_prefix
+        );
+    }
+}
+
+/// The growth curve behind the table in `BENCHMARKS.md`.
+#[test]
+#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]
+fn survey_cross_root_duplication() {
+    for collections in [false, true] {
+        println!(
+            "\nendpoints sharing one helper — {}:",
+            if collections {
+                "a pipeline over a durable list and map"
+            } else {
+                "arithmetic only"
+            }
+        );
+        println!(
+            "{:>8} {:>10} {:>9} {:>10} {:>11} {:>8} {:>9}",
+            "helpers", "endpoints", "bundles", "total", "duplicated", "share", "prefix"
+        );
+        for helpers in [1usize, 4, 16] {
+            for endpoints in [1usize, 2, 5, 10, 20, 40] {
+                let source = program_with_shared_endpoints(helpers, endpoints, collections);
+                let measured = endpoint_duplication(&source, "shared.zd");
+                println!(
+                    "{helpers:>8} {endpoints:>10} {:>9} {:>10} {:>11} {:>7.1}% {:>9}",
+                    measured.bundles,
+                    measured.total,
+                    measured.duplicated,
+                    measured.percent(),
+                    measured.common_prefix,
+                );
+            }
+        }
+    }
+
+    println!("\nthe examples that emit endpoints today:");
+    for name in [
+        "examples/guestbook.zd",
+        "examples/tally.zd",
+        "examples/voting-board.zd",
+    ] {
+        let source = std::fs::read_to_string(repository_path(name)).expect("an example");
+        let measured = endpoint_duplication(&source, name);
+        println!(
+            "{name:<28} bundles={:<3} total={:<6} duplicated={:<6} ({:.1}%) prefix={}",
+            measured.bundles,
+            measured.total,
+            measured.duplicated,
+            measured.percent(),
+            measured.common_prefix
+        );
+    }
 }
