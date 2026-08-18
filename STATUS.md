@@ -224,7 +224,7 @@ stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
-| `zdc-bench` | 53 | Plus 4 ignored. Includes the exact-match `BENCHMARKS.md` gate and, since #165, the timed growth sweep that is the only gate here a byte count cannot stand in for. |
+| `zdc-bench` | 54 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
 | `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |

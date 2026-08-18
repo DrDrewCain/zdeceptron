@@ -496,7 +496,7 @@ fn survey_emitter_growth() {
         "signals", "nodes", "client.js", "emit", "us/node"
     );
     for n in [8usize, 16, 32, 64, 128, 256, 512, 1024] {
-        let measured = zdc_bench::time_emission(&program_with_signals(n), "growth.zd", 5);
+        let measured = zdc_bench::measure_emission(&program_with_signals(n), "growth.zd", 5);
         println!(
             "{n:>8} {:>8} {:>11} {:>10.3}ms {:>10.2}",
             measured.nodes,
