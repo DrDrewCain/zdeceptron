@@ -1585,9 +1585,9 @@ fn a_file_input_refuses_a_signal_a_keystroke_cannot_write() {
         "state chosen is durable Option of Text starting None\nview\n    FileInput chosen\n",
     );
     assert!(
-        refusals
-            .iter()
-            .any(|message| message.contains("writes back on every keystroke")),
+        refusals.iter().any(|message| {
+            message.contains("`FileInput` writes back into it from the browser")
+        }),
         "a `durable` signal reached a file picker: {refusals:?}"
     );
 }
