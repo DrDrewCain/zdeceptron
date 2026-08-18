@@ -21,6 +21,32 @@ release that breaks a program will say so here, with the repair.
 
 ### Changed
 
+- **A scheduled cell is Untrusted.** `Writers::of`'s clock conjunct now
+  covers a schedule too. Without it, G-SIG clause 2 read the cell as holding
+  its resting `0` — a literal, and so Trusted — which gave a platform
+  timestamp the authority of a constant. No new grant: the closed set is
+  still eight, and default-closed gives the right answer once clause 2's
+  premise is false.
+
+- **`h` and `d` are readable duration units**, and a browser timer refuses
+  them by naming the construct that owns them instead of reporting that `d`
+  is not a unit. An hour keeps one spelling on each side of the word:
+  `"60m"` to the clock, `"1h"` to a schedule.
+
+- **`zdc explain E0322` stops saying the scheduled construct is unbuilt** and
+  shows it instead. What it still refuses on a `server` declaration is
+  `after`: a delay needs a moment to count from, and a serverless invocation
+  starts when a request arrives.
+
+- **`inbound` is a soft keyword, refused by name** — `E0108`, a new parse
+  code for a declaration that names a construct the language has designed and
+  not built. A webhook handler used to be told that its `state` declaration
+  needed a value. `zdc explain E0107` carries what is missing: `REL-PLACE′`
+  forbidding a `release` from an unauthenticated root, the `pc_i = Untrusted`
+  seed at one, and at-least-once redelivery with no uniqueness constraint to
+  make a double-append safe.
+
+
 - **`zdc build` and `zdc deploy` write a minified bundle** (#135). `counter.zd` shipped 27,022
   bytes and now ships **10,717** — 16,305 bytes, 60% of the page, taken off a first visit. The
   runtime loses about 70% of itself, because that is where this repository keeps its prose.
@@ -48,177 +74,111 @@ release that breaks a program will say so here, with the repair.
   file, so the saving is a measurement rather than a claim, and so that a change which grows
   the emission is still visible after the minifier has been over it.
 
-## [0.1.1] — 2026-08-12
-
 ### Added
 
-- **A label on a `choice` variant.** `Select` rendered a variant's identifier
-  as its option text, so a dropdown over `DirtBike`/`LawnMower` read
-  `DirtBike` and `LawnMower` and there was no way to say otherwise — a
-  variant's name is an identifier and cannot hold a space.
+- **Source maps, for statements** (#6). `zdc build` writes `client.js.map`
+  beside the bundle and the emission names it. A minified bundle carries
+  neither the map nor the trailer: minifying reflows the text, so every
+  mapping would name a line that has moved, and a map pointing at the wrong
+  line is worse than none. `zdc dev` serves the unminified emission with its
+  map, which is where a person debugs.
+- **A stylesheet's name carries a content hash** (#137), and the emitted
+  cache headers mark exactly those names `immutable`. The name in the
+  document and the name on disk are one string, settled once the bytes are.
+- **A routed site ships one base stylesheet, not one per page** (#136). Each
+  document links the shared `base.css` first and its own generated rules
+  second, which is the cascade the single file used to have between its two
+  halves, restated as document order.
+- **`record … unique` — identity keys for lists** (#2). A list keyed on the
+  field its record declares moves a node rather than rebuilding it: the
+  reconciler's swap went from six DOM operations to two, and clearing a
+  1,000-row list from 2,986 to 1.
+- **`bothOf` — two `Remote of T`s as one** (#20). `Pair of A to B` is what it
+  was waiting for. `Loading` wins over `Failed` and `Failed` over `Ready`,
+  and the rule is applied rather than stated: the `Failed` arm asks the other
+  half too, so the answer does not depend on which remote was written first.
+- **The wire format carries a version** (#144), and a server reading another
+  refuses by name before decoding a body rather than after a decode goes
+  wrong.
+- **`every` on a `server` declaration is a job the deployment runs on a
+  schedule** — §14G.4, issue #18. The same word as the browser's clock, in
+  the same slot, selected by the placement on the left, because moving a job
+  from the browser to the deployment should be a one-word edit rather than a
+  different construct.
 
   ```zd
-  choice Equipment
-      DirtBike  is "Dirt Bike"
-      ATV
-      LawnMower is "Lawn Mower"
+  state hourly is server Whole every "1h"
+      add 1 to visits
   ```
 
-  The label is the option's **text**; the option's **value** is still the
-  variant's name, because that is what the runtime round-trips on the way
-  back. Two variants may therefore share a label and stay distinct, and a
-  label may repeat another variant's name without colliding. Nothing inside
-  the program can read one: `when` dispatches on the variant, and an arm
-  written with the label does not parse. An arm with no label shows its name,
-  so this changes nothing about a `choice` that does not ask for it.
+  The block is required and is a real server root at `(Server, Trigger)` —
+  the second root kind, which `zdc-graph` had declared, tested and left
+  without a producer since it was written. Its statements are typechecked in
+  the trigger-rooted read table, its writes are ordinary store writes rather
+  than commands, and the information-flow write rule applies to them:
+  appending a secret to a public durable list from a job is `E-IFC-03`, which
+  is §14G.4 revision 4's own worked example being refused.
 
-  `Name is "text"` is deliberately the same shape as a `route`'s
-  `Home is "/"`, because it is the same idea — the string a variant is known
-  by outside the program. A `route`'s variants take no label; the string
-  after `is` is already spoken for, and it is the URL.
+  The cell holds the beat's **scheduled** start time in seconds since 1970,
+  so a beat the platform ran late still reports when it was due and a skipped
+  beat shows as a jump larger than the cadence.
 
-  Found by recreating a real commercial site, where the equipment dropdown
-  was the one thing that could not be said.
+  A cadence is one of nineteen — the durations that divide their unit,
+  `"1m"` through `"30m"`, `"1h"` through `"12h"`, and `"1d"`. That is not
+  tidiness: a cron expression cannot say "every seven minutes", because
+  `*/7` steps 0, 7, … 56 and then jumps back, while AWS's `rate(7 minutes)`
+  genuinely can — so accepting `"7m"` would mean one program meaning two
+  things depending on `--target`. One cadence has one spelling, so `"60m"` is
+  an error naming `"1h"`.
 
-- **`prelude/math.zd` — the transcendental functions, geometry, matrices and
-  the beginnings of a numerical toolkit.**
+- **`zdc deploy --target cloudflare` schedules it**, with `[triggers] crons`
+  in `wrangler.toml` and a `scheduled()` export that matches on
+  `controller.cron` and passes `controller.scheduledTime`. **The other three
+  targets refuse a program with a job**, each naming the platform fact that
+  stops it rather than a note about effort: Lambda's entry is
+  `streamifyResponse`-shaped for an HTTP request and a scheduled invocation
+  is a bare event; a Vercel cron *is* an HTTP request to a route, so the job
+  would need a public URL guarded only by a `CRON_SECRET` this router does
+  not check, and on Hobby it is additionally once a day; `Deno.cron` is not
+  available on the platform that adapter targets. A job written out and never
+  scheduled is a failure nothing later reports.
 
-  `number.zd` had `sqrt` and `power` and recorded honestly that `power` for a
-  fractional exponent needed "the exponential and the logarithm the language
-  does not have". It has them now, and the trigonometric family is the same
-  argument again: the platform's `Math.sin` is correctly rounded, and a series
-  expansion written in ZDeceptron would be a second answer to a question that
-  already has one.
+- **`examples/schedule.zd`**, and `docs/reference.md` gains *The schedule*.
 
-  - constants `pi`, `tau`, `eulerNumber`, and `radians of` / `degrees of`
-  - `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
-  - `exp`, `ln`, `log10`, `log2`, `cbrt`, `hypotenuse`, `hyperbolicTangent`
-  - vectors: `dot`, `magnitude`, `normalized`, `scaled`, `added`,
-    `subtracted`, `distance`, `axis`
-  - interpolation and easing: `mix`, `progress`, `clamped`, `clamped01`,
-    `smoothStep`, `smootherStep`, `easeIn`, `easeOut`
-  - angles and geometry: `wrapAngle`, `angleDelta`, `heading`, `fromAngle`,
-    `cross2`, `cross3`, `angleBetween`, `rotated2`, `projected`, `reflected`
-  - matrices: `transposed`, `applied`, `matrixProduct`, `matrixScaled`,
-    `matrixAdded`, `rowOf`, `columnOf`, `rowCount`, `columnCount`
-  - statistics and activations: `mean`, `variance`, `standardDeviation`,
-    `sigmoid`, `rectified`, `leakyRectified`, `softmax`
 
-  **Every primitive gives an `Option`, under the rule `sqrt` and `power`
-  already carried: `None` unless the answer is a finite number.** There is
-  deliberately no total variant beside it — that is a second spelling of one
-  operation, which §4.1 refuses. The vector, matrix and statistical
-  operations are written in ZDeceptron rather than declared as primitives,
-  and are total.
+- **`zdc build --report` writes `dist/report.json`: every claim about
+  JavaScript the program's integrity rests on, and nothing that says whether
+  the program is safe.** Residual risk R6 (#31).
 
-  A vector is a `List of Decimal` and a matrix a `List of List of Decimal`.
-  There is no `Matrix` type and there should not be one until the language
-  has a shape to check: a type that cannot say "n by m" is a rename of the
-  list, and a rename is not a guarantee. Nothing checks conformability, so a
-  ragged input gives a ragged answer.
+  Two of the eight ways a value becomes Trusted are asserted rather than
+  checked: `gives pure T` says a foreign's result is a function of its
+  arguments, and `gives trusted T` says it is not attacker-chosen whatever
+  went in. Both are a human's word about a module the compiler cannot read,
+  and §21.7's soundness argument leans on them — so the design specified a
+  report that would let a reviewer find them, and the report was never built.
+  A reader of a bundle had one route to the assertion holding their program
+  up, which was to read the source knowing what to look for.
 
-  `softmax` shifts by the largest term before exponentiating. The unshifted
-  form is one line shorter and gives `NaN` for inputs a real network reaches.
+  The file lists, per assertion: the declaration and its line, the module and
+  export it imports, every call site, and every `release` whose body reaches
+  it. That last list is the useful one — a release is where a program
+  declassifies, so an entry there says *this unchecked claim is what lets that
+  release compile*. Every `trusted p` clause is listed too, which makes true a
+  sentence E-REL-08's help text had been shipping since before the flag
+  existed. The prelude's twenty-seven purity grants are named rather than
+  located, because a prelude file is parsed on its own and a line number
+  resolved against the wrong file is worse than none.
 
-- **`from scroll` — where the reader is, as a signal.** §10 said `resize`,
-  `scroll` and `pointermove` "have no form at all: they are not events but
-  quantities, and want a different construct". This is that construct for
-  the first of the three.
-
-  ```zd
-  state travelled is client Decimal from scroll
-  ```
-
-  A `Decimal` from 0 to 100, written by the browser, carrying the clock's
-  four rules: `client` only (`E0362`), nothing may write it, it is
-  Untrusted, and it is disposed with its view. One `passive` listener per
-  program however many times it is read, coalesced to the animation frame —
-  a scroll fires far faster than a repaint, and a write per event schedules
-  work the compositor throws away.
-
-  A percentage and not a pixel offset, because an offset means nothing
-  without the document height and the language exposes no way to read one.
-
-- **`build markdown` renders GitHub-flavoured CommonMark.** Footnotes alone
-  was the whole option set, so a table rendered as pipes, `~~a~~` as
-  tildes, and a task list as brackets. Tables, strikethrough and task lists
-  are on now, matching the `remark-gfm` that real markdown is written
-  against.
-
-- **An asset stylesheet is linked from the root.** `./assets/site.css`
-  resolves against the *document's* directory, so it was correct only for a
-  document at the root; a routed program's `/writing/<slug>/index.html`
-  asked for `/writing/<slug>/assets/site.css` and rendered unstyled with
-  nothing saying why. The generated sheet beside it was already
-  `/pages/….css`.
-
-### Changed
-
-- **`examples/edit-distance.zd`'s `distance` is now `editDistance`.** The
-  prelude gained `distance` (the metric one, over two vectors), and a
-  prelude name and a program name may not be the same. This is the
-  compatibility cost of adding to the prelude, and it is recorded here
-  rather than absorbed silently: **any program with a top-level `distance`,
-  `mean`, `variance`, `mix`, `applied`, `heading` or any other new name above
-  will need to rename it.** That is a language change in a patch release,
-  which the versioning note at the top of this file says should be a minor
-  one; it is called 0.1.1 because 0.1.0 is eight days old and nothing depends
-  on it yet, and calling it otherwise would be ceremony rather than honesty.
-### Added
-
-- **`Dialog` — a modal, and the whole of it is the accessibility (#53).**
-
-  ```zd
-  state confirming is client Truth starting no
-
-  view
-      Column
-          Button "Delete"
-              on click
-                  set confirming to yes
-          Dialog confirming, label is "Delete this file?"
-              Text "This cannot be undone."
-              Button "Cancel"
-                  on click
-                      set confirming to no
-  ```
-
-  `widgets/README.md` carried a section called *"`Modal` — not
-  expressible"*, with four reasons and one root: nothing a program writes
-  in this language moves focus. Every reason was correct. What was wrong
-  was the conclusion that the language therefore needed a statement that
-  moves focus — because `<dialog>` opened with `showModal()` already has
-  all four, specified by HTML and implemented by the browser. Focus moves
-  in when it opens; focus is *trapped*, not by a Tab handler but because
-  everything outside the top layer is inert, which shuts out the pointer
-  and find-in-page too; Escape closes it; and focus **returns to whatever
-  opened it**, which is the half a hand-rolled modal forgets. So this is
-  one element and one binding rather than a focus statement, a `tabindex`
-  argument and a keydown handler that redirects Tab.
-
-  Whether the modal is showing is the `client Truth` it binds, and the
-  binding is two-way for a reason that is not symmetry: a close request
-  closes a `<dialog>` **without asking the program**, so a signal left
-  saying `yes` is a page whose next click does nothing and whose failure
-  is reported nowhere. The binding is idempotent against `dialog.open` —
-  what the DOM is doing — rather than against the last value written,
-  because `showModal()` throws on a dialog that is already open and the
-  browser can invalidate a remembered flag at any moment.
-
-  There is no `open` argument and no non-modal dialog: `open` as an
-  attribute shows the box with none of the four properties above, under
-  markup that looks like it has them. `label` is required, following
-  `Image`'s `alt` and `Frame`'s `title`, because a modal moves focus into
-  itself and an unnamed one is announced as "dialog".
-
-  The one thing the compiler adds beyond the element is a deferral. Every
-  binding runs while the tree is still a clone of a `<template>`, and
-  `showModal()` throws on a node that is not in the document, so a dialog
-  whose signal *starts* `yes` would have thrown at load and taken module
-  evaluation with it — #205's shape. `crates/zdc-cli/tests/browser.rs`
-  asks a real browser for all of it, because the embedded engine has no
-  focus, no top layer and no `inert` to ask about.
-### Added
+  **There is no `attackerReachable` field**, and there is not going to be one.
+  The design specified it and §21.8 withdrew it twice over. The reason worth
+  repeating is that giving a purity grant an argument chain — which is what
+  #31 asked for — would not help: the channel is inside the JavaScript, not in
+  the argument list. A query-string reader takes a string literal and reads
+  `location.search`, so a walk over its arguments answers "no
+  attacker-controlled value reaches this" about the exact grant a visitor
+  steers with a query string. An available, cheap, false answer is worse than
+  none. The report says which assertions exist and which releases rest on
+  them, and its own `notClaimed` array says the rest.
 
 - **`build parts` — a post can name a component, and the widget set is the
   program's to declare.** #305, and the one thing the MDX pipeline did that
@@ -308,115 +268,176 @@ release that breaks a program will say so here, with the repair.
   arrives. No `hint`: `placeholder` does nothing on a file input, as it does
   nothing on a date one, and the accessible name comes from a `Label` with
   `controls`.
-### Added
 
-- **`zdc build --report` writes `dist/report.json`: every claim about
-  JavaScript the program's integrity rests on, and nothing that says whether
-  the program is safe.** Residual risk R6 (#31).
-
-  Two of the eight ways a value becomes Trusted are asserted rather than
-  checked: `gives pure T` says a foreign's result is a function of its
-  arguments, and `gives trusted T` says it is not attacker-chosen whatever
-  went in. Both are a human's word about a module the compiler cannot read,
-  and §21.7's soundness argument leans on them — so the design specified a
-  report that would let a reviewer find them, and the report was never built.
-  A reader of a bundle had one route to the assertion holding their program
-  up, which was to read the source knowing what to look for.
-
-  The file lists, per assertion: the declaration and its line, the module and
-  export it imports, every call site, and every `release` whose body reaches
-  it. That last list is the useful one — a release is where a program
-  declassifies, so an entry there says *this unchecked claim is what lets that
-  release compile*. Every `trusted p` clause is listed too, which makes true a
-  sentence E-REL-08's help text had been shipping since before the flag
-  existed. The prelude's twenty-seven purity grants are named rather than
-  located, because a prelude file is parsed on its own and a line number
-  resolved against the wrong file is worse than none.
-
-  **There is no `attackerReachable` field**, and there is not going to be one.
-  The design specified it and §21.8 withdrew it twice over. The reason worth
-  repeating is that giving a purity grant an argument chain — which is what
-  #31 asked for — would not help: the channel is inside the JavaScript, not in
-  the argument list. A query-string reader takes a string literal and reads
-  `location.search`, so a walk over its arguments answers "no
-  attacker-controlled value reaches this" about the exact grant a visitor
-  steers with a query string. An available, cheap, false answer is worse than
-  none. The report says which assertions exist and which releases rest on
-  them, and its own `notClaimed` array says the rest.
-### Added
-
-- **`every` on a `server` declaration is a job the deployment runs on a
-  schedule** — §14G.4, issue #18. The same word as the browser's clock, in
-  the same slot, selected by the placement on the left, because moving a job
-  from the browser to the deployment should be a one-word edit rather than a
-  different construct.
+- **`Dialog` — a modal, and the whole of it is the accessibility (#53).**
 
   ```zd
-  state hourly is server Whole every "1h"
-      add 1 to visits
+  state confirming is client Truth starting no
+
+  view
+      Column
+          Button "Delete"
+              on click
+                  set confirming to yes
+          Dialog confirming, label is "Delete this file?"
+              Text "This cannot be undone."
+              Button "Cancel"
+                  on click
+                      set confirming to no
   ```
 
-  The block is required and is a real server root at `(Server, Trigger)` —
-  the second root kind, which `zdc-graph` had declared, tested and left
-  without a producer since it was written. Its statements are typechecked in
-  the trigger-rooted read table, its writes are ordinary store writes rather
-  than commands, and the information-flow write rule applies to them:
-  appending a secret to a public durable list from a job is `E-IFC-03`, which
-  is §14G.4 revision 4's own worked example being refused.
+  `widgets/README.md` carried a section called *"`Modal` — not
+  expressible"*, with four reasons and one root: nothing a program writes
+  in this language moves focus. Every reason was correct. What was wrong
+  was the conclusion that the language therefore needed a statement that
+  moves focus — because `<dialog>` opened with `showModal()` already has
+  all four, specified by HTML and implemented by the browser. Focus moves
+  in when it opens; focus is *trapped*, not by a Tab handler but because
+  everything outside the top layer is inert, which shuts out the pointer
+  and find-in-page too; Escape closes it; and focus **returns to whatever
+  opened it**, which is the half a hand-rolled modal forgets. So this is
+  one element and one binding rather than a focus statement, a `tabindex`
+  argument and a keydown handler that redirects Tab.
 
-  The cell holds the beat's **scheduled** start time in seconds since 1970,
-  so a beat the platform ran late still reports when it was due and a skipped
-  beat shows as a jump larger than the cadence.
+  Whether the modal is showing is the `client Truth` it binds, and the
+  binding is two-way for a reason that is not symmetry: a close request
+  closes a `<dialog>` **without asking the program**, so a signal left
+  saying `yes` is a page whose next click does nothing and whose failure
+  is reported nowhere. The binding is idempotent against `dialog.open` —
+  what the DOM is doing — rather than against the last value written,
+  because `showModal()` throws on a dialog that is already open and the
+  browser can invalidate a remembered flag at any moment.
 
-  A cadence is one of nineteen — the durations that divide their unit,
-  `"1m"` through `"30m"`, `"1h"` through `"12h"`, and `"1d"`. That is not
-  tidiness: a cron expression cannot say "every seven minutes", because
-  `*/7` steps 0, 7, … 56 and then jumps back, while AWS's `rate(7 minutes)`
-  genuinely can — so accepting `"7m"` would mean one program meaning two
-  things depending on `--target`. One cadence has one spelling, so `"60m"` is
-  an error naming `"1h"`.
+  There is no `open` argument and no non-modal dialog: `open` as an
+  attribute shows the box with none of the four properties above, under
+  markup that looks like it has them. `label` is required, following
+  `Image`'s `alt` and `Frame`'s `title`, because a modal moves focus into
+  itself and an unnamed one is announced as "dialog".
 
-- **`zdc deploy --target cloudflare` schedules it**, with `[triggers] crons`
-  in `wrangler.toml` and a `scheduled()` export that matches on
-  `controller.cron` and passes `controller.scheduledTime`. **The other three
-  targets refuse a program with a job**, each naming the platform fact that
-  stops it rather than a note about effort: Lambda's entry is
-  `streamifyResponse`-shaped for an HTTP request and a scheduled invocation
-  is a bare event; a Vercel cron *is* an HTTP request to a route, so the job
-  would need a public URL guarded only by a `CRON_SECRET` this router does
-  not check, and on Hobby it is additionally once a day; `Deno.cron` is not
-  available on the platform that adapter targets. A job written out and never
-  scheduled is a failure nothing later reports.
+  The one thing the compiler adds beyond the element is a deferral. Every
+  binding runs while the tree is still a clone of a `<template>`, and
+  `showModal()` throws on a node that is not in the document, so a dialog
+  whose signal *starts* `yes` would have thrown at load and taken module
+  evaluation with it — #205's shape. `crates/zdc-cli/tests/browser.rs`
+  asks a real browser for all of it, because the embedded engine has no
+  focus, no top layer and no `inert` to ask about.
 
-- **`examples/schedule.zd`**, and `docs/reference.md` gains *The schedule*.
+- **`prelude/math.zd` — the transcendental functions, geometry, matrices and
+  the beginnings of a numerical toolkit.**
+
+  `number.zd` had `sqrt` and `power` and recorded honestly that `power` for a
+  fractional exponent needed "the exponential and the logarithm the language
+  does not have". It has them now, and the trigonometric family is the same
+  argument again: the platform's `Math.sin` is correctly rounded, and a series
+  expansion written in ZDeceptron would be a second answer to a question that
+  already has one.
+
+  - constants `pi`, `tau`, `eulerNumber`, and `radians of` / `degrees of`
+  - `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
+  - `exp`, `ln`, `log10`, `log2`, `cbrt`, `hypotenuse`, `hyperbolicTangent`
+  - vectors: `dot`, `magnitude`, `normalized`, `scaled`, `added`,
+    `subtracted`, `distance`, `axis`
+  - interpolation and easing: `mix`, `progress`, `clamped`, `clamped01`,
+    `smoothStep`, `smootherStep`, `easeIn`, `easeOut`
+  - angles and geometry: `wrapAngle`, `angleDelta`, `heading`, `fromAngle`,
+    `cross2`, `cross3`, `angleBetween`, `rotated2`, `projected`, `reflected`
+  - matrices: `transposed`, `applied`, `matrixProduct`, `matrixScaled`,
+    `matrixAdded`, `rowOf`, `columnOf`, `rowCount`, `columnCount`
+  - statistics and activations: `mean`, `variance`, `standardDeviation`,
+    `sigmoid`, `rectified`, `leakyRectified`, `softmax`
+
+  **Every primitive gives an `Option`, under the rule `sqrt` and `power`
+  already carried: `None` unless the answer is a finite number.** There is
+  deliberately no total variant beside it — that is a second spelling of one
+  operation, which §4.1 refuses. The vector, matrix and statistical
+  operations are written in ZDeceptron rather than declared as primitives,
+  and are total.
+
+  A vector is a `List of Decimal` and a matrix a `List of List of Decimal`.
+  There is no `Matrix` type and there should not be one until the language
+  has a shape to check: a type that cannot say "n by m" is a rename of the
+  list, and a rename is not a guarantee. Nothing checks conformability, so a
+  ragged input gives a ragged answer.
+
+  `softmax` shifts by the largest term before exponentiating. The unshifted
+  form is one line shorter and gives `NaN` for inputs a real network reaches.
+
+- **`from scroll` — where the reader is, as a signal.** §10 said `resize`,
+  `scroll` and `pointermove` "have no form at all: they are not events but
+  quantities, and want a different construct". This is that construct for
+  the first of the three.
+
+  ```zd
+  state travelled is client Decimal from scroll
+  ```
+
+  A `Decimal` from 0 to 100, written by the browser, carrying the clock's
+  four rules: `client` only (`E0362`), nothing may write it, it is
+  Untrusted, and it is disposed with its view. One `passive` listener per
+  program however many times it is read, coalesced to the animation frame —
+  a scroll fires far faster than a repaint, and a write per event schedules
+  work the compositor throws away.
+
+  A percentage and not a pixel offset, because an offset means nothing
+  without the document height and the language exposes no way to read one.
+
+- **`build markdown` renders GitHub-flavoured CommonMark.** Footnotes alone
+  was the whole option set, so a table rendered as pipes, `~~a~~` as
+  tildes, and a task list as brackets. Tables, strikethrough and task lists
+  are on now, matching the `remark-gfm` that real markdown is written
+  against.
+
+- **An asset stylesheet is linked from the root.** `./assets/site.css`
+  resolves against the *document's* directory, so it was correct only for a
+  document at the root; a routed program's `/writing/<slug>/index.html`
+  asked for `/writing/<slug>/assets/site.css` and rendered unstyled with
+  nothing saying why. The generated sheet beside it was already
+  `/pages/….css`.
+
+## [0.1.1] — 2026-08-12
+### Added
+
+- **A label on a `choice` variant.** `Select` rendered a variant's identifier
+  as its option text, so a dropdown over `DirtBike`/`LawnMower` read
+  `DirtBike` and `LawnMower` and there was no way to say otherwise — a
+  variant's name is an identifier and cannot hold a space.
+
+  ```zd
+  choice Equipment
+      DirtBike  is "Dirt Bike"
+      ATV
+      LawnMower is "Lawn Mower"
+  ```
+
+  The label is the option's **text**; the option's **value** is still the
+  variant's name, because that is what the runtime round-trips on the way
+  back. Two variants may therefore share a label and stay distinct, and a
+  label may repeat another variant's name without colliding. Nothing inside
+  the program can read one: `when` dispatches on the variant, and an arm
+  written with the label does not parse. An arm with no label shows its name,
+  so this changes nothing about a `choice` that does not ask for it.
+
+  `Name is "text"` is deliberately the same shape as a `route`'s
+  `Home is "/"`, because it is the same idea — the string a variant is known
+  by outside the program. A `route`'s variants take no label; the string
+  after `is` is already spoken for, and it is the URL.
+
+  Found by recreating a real commercial site, where the equipment dropdown
+  was the one thing that could not be said.
+
 
 ### Changed
 
-- **A scheduled cell is Untrusted.** `Writers::of`'s clock conjunct now
-  covers a schedule too. Without it, G-SIG clause 2 read the cell as holding
-  its resting `0` — a literal, and so Trusted — which gave a platform
-  timestamp the authority of a constant. No new grant: the closed set is
-  still eight, and default-closed gives the right answer once clause 2's
-  premise is false.
-
-- **`h` and `d` are readable duration units**, and a browser timer refuses
-  them by naming the construct that owns them instead of reporting that `d`
-  is not a unit. An hour keeps one spelling on each side of the word:
-  `"60m"` to the clock, `"1h"` to a schedule.
-
-- **`zdc explain E0322` stops saying the scheduled construct is unbuilt** and
-  shows it instead. What it still refuses on a `server` declaration is
-  `after`: a delay needs a moment to count from, and a serverless invocation
-  starts when a request arrives.
-
-- **`inbound` is a soft keyword, refused by name** — `E0107`, a new parse
-  code for a declaration that names a construct the language has designed and
-  not built. A webhook handler used to be told that its `state` declaration
-  needed a value. `zdc explain E0107` carries what is missing: `REL-PLACE′`
-  forbidding a `release` from an unauthenticated root, the `pc_i = Untrusted`
-  seed at one, and at-least-once redelivery with no uniqueness constraint to
-  make a double-append safe.
-
+- **`examples/edit-distance.zd`'s `distance` is now `editDistance`.** The
+  prelude gained `distance` (the metric one, over two vectors), and a
+  prelude name and a program name may not be the same. This is the
+  compatibility cost of adding to the prelude, and it is recorded here
+  rather than absorbed silently: **any program with a top-level `distance`,
+  `mean`, `variance`, `mix`, `applied`, `heading` or any other new name above
+  will need to rename it.** That is a language change in a patch release,
+  which the versioning note at the top of this file says should be a minor
+  one; it is called 0.1.1 because 0.1.0 is eight days old and nothing depends
+  on it yet, and calling it otherwise would be ceremony rather than honesty.
 ## [0.1.0] — 2026-08-11
 
 ### Added
