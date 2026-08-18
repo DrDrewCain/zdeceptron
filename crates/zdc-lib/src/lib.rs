@@ -49,6 +49,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("prelude/map.zd", include_str!("../prelude/map.zd")),
     ("prelude/encode.zd", include_str!("../prelude/encode.zd")),
     ("prelude/time.zd", include_str!("../prelude/time.zd")),
+    ("prelude/parts.zd", include_str!("../prelude/parts.zd")),
 ];
 
 /// The parsed library, as one program.
@@ -202,6 +203,13 @@ mod tests {
     /// declares. They are spelled with the "civil" of the calendar
     /// literature rather than as `Date` and `Time`, which are the two
     /// nouns a program is most likely to want for a record of its own.
+    ///
+    /// `Part` is the third, and it is the one type here a *compiler*
+    /// produces values of: `build parts` gives a `List of Part`, so the
+    /// name has to be one no program can redeclare — which is exactly what
+    /// putting it in the library buys. It costs `Part` as a record name,
+    /// and the word was chosen over `Block` and `Section` because those two
+    /// are what a program writing a document editor would want.
     #[test]
     fn the_prelude_declares_exactly_these_operations() {
         assert_eq!(
@@ -209,6 +217,7 @@ mod tests {
             [
                 "CivilDate",
                 "CivilTime",
+                "Part",
                 "abs",
                 "acos",
                 "added",

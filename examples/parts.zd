@@ -1,0 +1,124 @@
+# parts.zd — a post that names a component (issue #305).
+#
+# `writing.zd` reads `content/*.md` and renders each file as one `Prose`.
+# That is every post this language could publish until now, and it is the
+# one thing the MDX pipeline does that it could not: **a post could not
+# name a component.** The day a post wants an interactive chart, the chart
+# has to come from somewhere the markdown cannot reach.
+#
+# ## Why `Prose` could not simply grow children
+#
+# `Prose` has no children, and the reason is in `elements.rs`: interleaving
+# parsed nodes with templated ones would make the sibling offsets every
+# binding is scheduled against depend on how many nodes a *file* parsed
+# into, which is not known at compile time. That argument is sound and it
+# does not go away, so the answer is not an escape hatch inside the markup.
+#
+# ## The shape that works
+#
+# A post stops being one `Markup` and becomes a **list of parts**. Each
+# part is either a run of prose or a named widget, the document is an
+# ordinary `each` over that list, and each part is its own node — so no
+# parsed subtree ever shares a parent with a templated one and the offset
+# problem never arises.
+#
+# ## The widget set is closed, and the program owns it
+#
+# A component cannot be resolved from a file's text: components are
+# resolved statically and a name out of a `.md` is not a name the compiler
+# saw. So the *program* declares which widgets a post may use, and a post
+# naming anything else is a **failed build** — not a blank space. That is a
+# stronger bargain than MDX makes, where an `import` inside a content file
+# can reach anything on disk.
+#
+# Try it: change `spacetrader-wars.md` to say ```zd PieChart``` and the
+# build stops, naming the widget and listing the two this program offers.
+
+# The closed set. Its variants are the whole of what a document under
+# `content/parts/` may name, and the compiler reads them: `build parts`
+# refuses a name that is not one of these at the moment the file is read.
+choice Widget
+    RingChart
+    StackBars
+
+record Post
+    slug is Text
+    # `List of Part`, where `writing.zd` has one `Markup`. `Part` is a
+    # prelude record and `build parts` is the only thing that makes one.
+    parts is List of Part
+
+state posts is static List of Post from readPosts with directory is "content/parts"
+
+function readPosts with directory
+    from build list directory
+    map each path to postFrom with path
+
+function postFrom with path
+    give Post with slug is path, parts is build parts (build read path)
+
+# The two widgets, as ordinary components. Nothing about them is special:
+# they hold `client` state, they respond to clicks, and they would be
+# written exactly this way if the page had named them itself. What the
+# capability adds is that a *file* may ask for one.
+component RingChart with argument
+    state share is client Whole starting 60
+
+    Column padding is 8
+        Text argument
+        Meter share,
+            least is 0,
+            most is 100,
+            low is 20,
+            high is 80,
+            best is 60,
+            label is "share"
+        Row
+            Button "less"
+                on click
+                    subtract 10 from share
+            Button "more"
+                on click
+                    add 10 to share
+
+component StackBars with argument
+    state open is client Truth starting no
+
+    Column padding is 8
+        Text argument
+        Button "show the second bar"
+            on click
+                set open to not open
+        if open
+            Text "the second bar"
+
+# The dispatch, and the one place this program spells the names twice.
+#
+# The `choice` above is the declaration; this is the elimination. They are
+# two constructs rather than one because the language has no way to turn a
+# `Text` into a variant of a `choice` — `when` eliminates a choice value,
+# and what arrives here is a name. The compiler holds the two together at
+# the only point where being wrong would matter: a name the `choice` does
+# not offer never reaches this component, because the build stopped.
+component PostWidget with name, argument
+    if name is "RingChart"
+        RingChart argument
+    if name is "StackBars"
+        StackBars argument
+
+view title is "A post that names a component"
+    Column
+        Heading "Posts"
+
+        each post in posts
+            Column padding is 8
+                Text post.slug
+
+                each part in post.parts
+                    # The whole of the dispatch. A record rather than a
+                    # `choice` because this one test is all it takes, and a
+                    # choice with payloads would need construction and
+                    # elimination machinery to earn the distinction.
+                    if isBlank of part.widget
+                        Prose part.markup
+                    if not (isBlank of part.widget)
+                        PostWidget part.widget, part.argument

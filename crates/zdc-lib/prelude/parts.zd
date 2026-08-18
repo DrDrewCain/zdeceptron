@@ -1,0 +1,42 @@
+# parts.zd — what a document splits into (issue #305).
+#
+# A post used to be one `Markup`, and a `Markup` is one node: `Prose` has
+# no children and cannot grow them, because interleaving parsed nodes with
+# templated ones would make the sibling offsets every binding is scheduled
+# against depend on how many nodes a *file* parsed into, which is not known
+# at compile time. That argument is sound and it does not go away, so the
+# answer is not an escape hatch inside the markup.
+#
+# The answer is a **list**. A document becomes a list of parts, each one
+# either a run of prose or a named widget, and the view is then an ordinary
+# `each` over it. Each part is its own node, so no parsed subtree ever
+# shares a parent with a templated one and the offset problem never arises.
+#
+# Declared here rather than by each program for the reason `Pair` is built
+# in: `build parts` has to have a return type, and a type the compiler
+# produces values of cannot be one the program is free to redeclare.
+
+# One piece of a document: prose, or a widget the file named.
+#
+# A record and not a `choice`. `if isBlank of part.widget` is the whole of
+# the dispatch, and a choice with payloads would need construction and
+# elimination machinery to earn a distinction the one test already makes.
+#
+# `markup` is empty for a widget and `widget` is empty for a run of prose,
+# so exactly one of the two is ever non-empty. That is an invariant of
+# `build parts`, which is the only thing in the language that makes one.
+record Part
+    # The prose run, rendered by the same pass `build markdown` uses — so
+    # a `<script>` in a file is shown rather than run here too. Empty for a
+    # widget part.
+    markup is Markup
+    # The widget's name, exactly as the file wrote it, and empty for a run
+    # of prose. It is checked against the names the program declares before
+    # the value ever exists: a document naming a widget the program does
+    # not offer is a failed build, not a blank space.
+    widget is Text
+    # What the file passed the widget: the fenced block's body, verbatim.
+    # `Text`, because a document cannot hand a *value* across — a widget
+    # that needs one looks it up from what it was told, which is what a
+    # `slug:` argument already implies.
+    argument is Text

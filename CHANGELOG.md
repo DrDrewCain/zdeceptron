@@ -218,6 +218,38 @@ release that breaks a program will say so here, with the repair.
   evaluation with it — #205's shape. `crates/zdc-cli/tests/browser.rs`
   asks a real browser for all of it, because the embedded engine has no
   focus, no top layer and no `inert` to ask about.
+### Added
+
+- **`build parts` — a post can name a component, and the widget set is the
+  program's to declare.** #305, and the one thing the MDX pipeline did that
+  this language could not.
+
+  A post used to be one `Markup`, rendered into one `Prose`. `Prose` has no
+  children and cannot grow them: interleaving parsed nodes with templated ones
+  would make the sibling offsets every binding is scheduled against depend on
+  how many nodes a *file* parsed into, which is not known at compile time. So
+  a document that wants an interactive chart in the middle of it is not one
+  node. It is a **list**, and `build parts` is what makes one — a `List of
+  Part`, each part either a run of prose or a named widget, rendered by an
+  ordinary `each`. Each part is its own node, so no parsed subtree ever shares
+  a parent with a templated one and the offset problem never arises.
+
+  A file names a widget with a fence whose info string begins with `zd`; every
+  other fence stays a code block, and every run of prose goes through the same
+  rewriting pass `build markdown` already did, so a `<script>` in a post is
+  still shown rather than run. **No markdown parser ships**, exactly as before.
+
+  **The widget set is closed and the program declares it**, as a `choice`
+  named `Widget`. A component cannot be resolved from a file's text —
+  components are resolved statically and a name out of a `.md` is not a name
+  the compiler saw — so a document naming a widget the program does not offer
+  is a failed build (`E11`) naming the widget and listing the ones on offer,
+  rather than a blank space on a page. That is a stronger bargain than MDX
+  makes, where an `import` inside a content file can reach anything on disk.
+
+  `Part` is a prelude record, which costs `Part` as a name every program could
+  otherwise have used. `examples/parts.zd` and
+  `examples/content/parts/spacetrader-wars.md` are the whole story running.
 
 ## [0.1.0] — 2026-08-11
 

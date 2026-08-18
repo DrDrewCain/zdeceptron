@@ -1422,14 +1422,65 @@ pub enum BuildCapability {
     List,
     /// `build markdown source` — CommonMark rendered to HTML, as `Text`.
     Markdown,
+    /// `build parts source` — one document split into a `List of Part`
+    /// (issue #305).
+    ///
+    /// The capability `Markdown` could not be. `Prose` renders one
+    /// `Markup` and has no children, because interleaving parsed nodes
+    /// with templated ones would make the sibling offsets every binding is
+    /// scheduled against depend on how many nodes a *file* parsed into. So
+    /// a document that wants an interactive chart in the middle of it
+    /// cannot be one node, and this is the capability that makes it a
+    /// list: prose runs and named widgets, alternating, each its own node
+    /// under an ordinary `each`.
+    ///
+    /// It renders the prose with the same pass `Markdown` uses, so
+    /// everything that is true of a rendered post is true of a rendered
+    /// part.
+    Parts,
 }
+
+/// The record `build parts` hands back one of per part — issue #305.
+///
+/// Declared in the prelude (`prelude/parts.zd`) rather than built in, so
+/// that field access, construction and `each` need no rule for it. Named
+/// here because the checker gives `build parts` this type and the
+/// evaluator builds values of it, and a name those two disagreed about
+/// would be a `List of Part` no program could read.
+pub const PART_RECORD: &str = "Part";
+
+/// `Part`'s fields, in declaration order.
+///
+/// One list, read by the checker and by the sandbox that builds the
+/// values, for the reason `Type::PAIR_FIELDS` is one list: two spellings
+/// of a record's shape is a record two passes disagree about.
+pub const PART_FIELDS: [&str; 3] = ["markup", "widget", "argument"];
+
+/// The `choice` a program declares to say which widgets a document may
+/// name — issue #305.
+///
+/// **This is the closed set, and the program owns it.** A component cannot
+/// be resolved from a file's text: components are resolved statically and
+/// a name out of a `.md` is not a name the compiler saw. So the program
+/// declares what a post may ask for, dispatches on the name with a `when`
+/// over this choice, and a document naming anything else is a **failed
+/// build** rather than a blank space — which is a stronger bargain than
+/// MDX makes, where an `import` inside a content file can reach anything
+/// on disk.
+///
+/// Located by name, which is the one thing this design needed that the
+/// language had no spelling for. The alternative was a keyword, and
+/// §14G.7.7's budget is not worth spending on a declaration that is
+/// already a `choice` in every respect but this one.
+pub const WIDGET_CHOICE: &str = "Widget";
 
 impl BuildCapability {
     /// The closed set, in the order a diagnostic should list it.
-    pub const ALL: [BuildCapability; 3] = [
+    pub const ALL: [BuildCapability; 4] = [
         BuildCapability::Read,
         BuildCapability::List,
         BuildCapability::Markdown,
+        BuildCapability::Parts,
     ];
 
     /// The one spelling of this capability's name.
@@ -1438,6 +1489,7 @@ impl BuildCapability {
             BuildCapability::Read => "read",
             BuildCapability::List => "list",
             BuildCapability::Markdown => "markdown",
+            BuildCapability::Parts => "parts",
         }
     }
 
@@ -1454,6 +1506,7 @@ impl BuildCapability {
             BuildCapability::Read => "reads a file from the project directory",
             BuildCapability::List => "lists the files in a directory of the project",
             BuildCapability::Markdown => "renders CommonMark to HTML",
+            BuildCapability::Parts => "splits a document into prose runs and the widgets it names",
         }
     }
 }

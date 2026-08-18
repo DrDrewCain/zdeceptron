@@ -145,7 +145,7 @@ fn evaluate_on_this_thread(
     // Capabilities are installed **before** the module runs, because the
     // module's top-level `const`s are where a `static` value is computed.
     sandbox
-        .provide(directory, &capability::all())
+        .provide(directory, &module.widgets, &capability::all())
         .map_err(|error| failure(module, error))?;
     sandbox
         .load(&module.source)
@@ -273,7 +273,7 @@ fn run_tests_on_this_thread(
     }
     let mut sandbox = Sandbox::new();
     sandbox
-        .provide(directory, &capability::all())
+        .provide(directory, &module.widgets, &capability::all())
         .map_err(|error| failure(module, error))?;
     sandbox
         .load(&module.source)

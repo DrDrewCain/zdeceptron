@@ -2406,13 +2406,22 @@ impl<'a> Checker<'a> {
                             "`build list` takes the path of a directory, which"
                         }
                         BuildCapability::Markdown => "`build markdown` takes CommonMark, which",
+                        BuildCapability::Parts => "`build parts` takes a whole document, which",
                     },
                 );
                 match capability {
                     BuildCapability::Read => Type::Text,
-                    // The one producer of `Markup` in the language.
+                    // The two producers of `Markup` in the language: this
+                    // one, and the `markup` field of the `Part`s below.
                     BuildCapability::Markdown => Type::Markup,
                     BuildCapability::List => Type::list(Type::Text),
+                    // `Part` is a prelude record, so this is an ordinary
+                    // nominal type that `declare_types` has already
+                    // collected the fields of — nothing here is special
+                    // to the capability except which name it names.
+                    BuildCapability::Parts => {
+                        Type::list(Type::Named(zdc_hir::PART_RECORD.to_string()))
+                    }
                 }
             }
             HirExprKind::Ref(res) => {

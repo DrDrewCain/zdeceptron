@@ -16,6 +16,16 @@
 //! decide what markup is built at all. The two halves are one audit: the
 //! first is about a value's *path* to the output, the second about whether
 //! a node reaches a checked path in the first place.
+//!
+//! **One path is audited elsewhere and is named here so the index stays
+//! complete.** `build parts` (#305) reads a *widget name* out of a `.md`
+//! file, which is the first thing from a content file that both reaches
+//! `client.js` as a literal and selects what is rendered. It is closed at
+//! the source rather than escaped at the sink — a name that is not a
+//! declaration name is refused, because it names nothing the program could
+//! have declared — and that is asserted in `parts.rs`, by
+//! `a_widget_name_that_could_close_a_string_never_becomes_one`, which
+//! needs a project on disk that this file's helpers do not build.
 
 mod support;
 
