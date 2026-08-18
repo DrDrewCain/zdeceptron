@@ -26,12 +26,12 @@ ariadne.workspace = true
 # feature unification is per dependency *graph*, so one manifest asking
 # for the default re-enables it for every crate in the build. Rendering a
 # diagnostic does not need an interpreter.
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.1", default-features = false }
-zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
-zdc-lexer = { path = "../zdc-lexer", version = "0.1.1" }
-zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
-zdc-resolve = { path = "../zdc-resolve", version = "0.1.1" }
-zdc-types = { path = "../zdc-types", version = "0.1.1" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.2.0", default-features = false }
+zdc-graph = { path = "../zdc-graph", version = "0.2.0" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.2.0" }
+zdc-parser = { path = "../zdc-parser", version = "0.2.0" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.2.0" }
+zdc-types = { path = "../zdc-types", version = "0.2.0" }
 
 [dev-dependencies]
 # The JSON form is checked by parsing it with a real JavaScript engine

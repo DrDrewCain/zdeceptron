@@ -17,7 +17,7 @@ means in practice is that a program is guaranteed to keep compiling across a
 patch release and is not guaranteed to across a minor one — and any minor
 release that breaks a program will say so here, with the repair.
 
-## [Unreleased]
+## [0.2.0] — 2026-08-18
 
 ### Changed
 
@@ -27,6 +27,23 @@ release that breaks a program will say so here, with the repair.
   timestamp the authority of a constant. No new grant: the closed set is
   still eight, and default-closed gives the right answer once clause 2's
   premise is false.
+
+  **This can refuse a program that `0.1.1` accepted**, and it is the only
+  change here that can. A scheduled cell's declaration carries a resting
+  `0` so that every pass sees an expression rather than a hole, and clause
+  2 read that literal as the cell's value — so a beat came out Trusted on
+  the strength of a number nothing ever reads. It is Untrusted now, and a
+  program that let one reach a place requiring Trusted stops building.
+
+  **The repair is not a grant, and there is no grant to reach for.** The
+  cadence is as trusted as the program text it was generated from, but the
+  time is not the cadence: it is the platform's reading of a clock, and
+  `clock` is admitted by §21.9 only behind a `gives pure` marker precisely
+  so that a reading cannot launder itself into evidence. The set did not
+  grow for this and is still closed at eight. So a program that required
+  trust of a beat was relying on the literal, and the repair is to stop
+  requiring it — `crates/zdc-graph/tests/integrity.rs`'s
+  `a_beat_is_untrusted_and_needs_no_new_grant` is the worked case.
 
 - **`h` and `d` are readable duration units**, and a browser timer refuses
   them by naming the construct that owns them instead of reporting that `d`

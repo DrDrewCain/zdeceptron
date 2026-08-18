@@ -17,8 +17,8 @@ description = "The one canonical layout for ZDeceptron source: `zdc fmt`."
 # break.
 
 [dependencies]
-zdc-lexer = { path = "../zdc-lexer", version = "0.1.1" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.2.0" }
 # The syntax tree is thrown away — nothing is emitted from it, because it
 # holds no comments. `parse` is called for its *verdict*: a file the
 # compiler will not read is a file this must not rewrite.
-zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
+zdc-parser = { path = "../zdc-parser", version = "0.2.0" }
