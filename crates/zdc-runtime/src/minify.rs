@@ -1,3 +1,12 @@
+// The published site documents private items — `docs.yml` passes
+// `--document-private-items`, and the decision is argued there: nineteen
+// of the twenty-one crates are compiler internals, and documenting only
+// the public surface would drop more than half the prose. So a link from
+// this module's docs to a private helper *does* resolve on the site, and
+// the lint that fires here is answering a question this workspace has
+// already decided differently.
+#![allow(rustdoc::private_intra_doc_links)]
+
 //! Minification: what a reader downloads, minus what only a reader of the
 //! *source* needs — issue #135.
 //!
