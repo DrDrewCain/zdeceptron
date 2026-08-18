@@ -1,0 +1,8 @@
+# expect: writes no step for it to run through
+#
+# The other half of the same rule. A duration with no steps is an animation
+# over a sequence with nothing in it: the browser runs it, faithfully, and
+# nothing changes for four hundred milliseconds.
+view
+    Column
+        Text "x", animation is "400ms"

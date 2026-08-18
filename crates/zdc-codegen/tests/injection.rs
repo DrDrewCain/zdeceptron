@@ -663,7 +663,16 @@ fn no_style_argument_can_write_a_rule_of_its_own() {
         ("opacity", "50"),
         ("shadow", "low"),
         ("cursor", "pointer"),
+        // The transform vocabulary, which this list had not caught up
+        // with. Each is printed into the same rule as everything above
+        // it, so each is a printing site the audit claims to cover.
+        ("rotate", "30"),
+        ("scale", "2"),
+        ("translate", "8"),
+        ("origin", "bottom"),
         ("transition", "fast"),
+        ("animation", "400ms"),
+        ("repeat", "once"),
         ("weight", "bold"),
         ("padding", "8"),
     ];
@@ -686,7 +695,7 @@ fn no_style_argument_can_write_a_rule_of_its_own() {
         }
     }
     assert_eq!(
-        tried, 39,
+        tried, 45,
         "every style argument must have been tried; the list holds {tried}"
     );
 }
@@ -715,7 +724,31 @@ fn no_prefixed_style_argument_can_write_a_rule_of_its_own() {
             ),
         }
     }
-    assert_eq!(tried, 7, "every prefix must have been tried");
+    // A step is a third printing site, and the sharpest of them: it is
+    // printed inside `@keyframes zd-k0 { from { … } }`, where a value that
+    // can end its declaration ends the *block* and everything after it
+    // becomes top-level CSS. The duration is written so that the
+    // animation is whole, and the payload is therefore the only thing
+    // left for the compiler to object to.
+    for step in ["from", "mid", "to"] {
+        tried += 1;
+        let source = format!(
+            "view\n\
+             \x20   Column animation is \"1s\", {step}Background is \"red{PAYLOAD}\"\n\
+             \x20       Text \"x\"\n"
+        );
+        match try_compile(&source, "test.zd") {
+            Err(_) => {}
+            Ok(bundle) => panic!(
+                "`{step}Background` emitted rather than refusing the payload:\n{}",
+                bundle.styles_css
+            ),
+        }
+    }
+    assert_eq!(
+        tried, 10,
+        "every prefix and every step must have been tried"
+    );
 }
 
 /// The other half of the audit: no `@media` or selector a program wrote
@@ -775,7 +808,9 @@ fn the_generated_stylesheet_balances_whatever_it_was_given() {
     let bundle = compile_source(
         "view\n\
          \x20   Column background is \"surface\", hoverBackground is \"raised\", \
-         narrowPadding is 8, widePadding is 32, darkColor is \"ink\", transition is \"fast\"\n\
+         narrowPadding is 8, widePadding is 32, darkColor is \"ink\", transition is \"fast\", \
+         animation is \"1s\", repeat is \"forever\", fromColor is \"red\", midColor is \"blue\", \
+         toColor is \"red\"\n\
          \x20       Text \"x\"\n",
     );
     assert_eq!(
