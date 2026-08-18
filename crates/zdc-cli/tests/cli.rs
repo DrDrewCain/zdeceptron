@@ -2649,3 +2649,55 @@ fn fmt_refuses_an_entangled_block_literal_and_says_which_line() {
         entangled
     );
 }
+
+/// **A bare filename names a file in a directory, and that directory is
+/// `.`** — `zdc build program.zd` rather than `zdc build ./program.zd`.
+///
+/// `Path::parent` of a bare filename is `Some("")` and not `None`, so the
+/// ordinary `parent().unwrap_or(Path::new("."))` guards a case that cannot
+/// happen and misses the one that does. An empty path canonicalises to
+/// nothing, and every command that evaluates a build capability refused
+/// with "the project directory `` could not be resolved": `zdc build`,
+/// `zdc test` and `zdc dev` alike. `zdc check` escaped it only because it
+/// stubs `static` values rather than computing them.
+///
+/// Run from the program's own directory, because that is the invocation —
+/// naming the file the way a person in that directory would.
+#[test]
+fn a_bare_filename_builds_a_program_that_reads_the_project() {
+    let out = TempDir::new("bare-filename");
+    std::fs::create_dir_all(out.path.join("content")).expect("a content directory");
+    std::fs::write(out.path.join("content/note.md"), "# a note\n").expect("a note");
+    std::fs::write(
+        out.path.join("program.zd"),
+        "state pages is static List of Text from build list \"content\"\n\
+         \n\
+         view\n\
+         \x20   Column\n\
+         \x20       each page in pages\n\
+         \x20           Text page\n",
+    )
+    .expect("a program");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_zdc"))
+        .current_dir(&out.path)
+        .args(["build", "program.zd", "--out", "built"])
+        .output()
+        .expect("failed to run the zdc binary");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a bare filename must build: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // And the capability actually read the directory, rather than the
+    // build succeeding with an empty answer.
+    let client = std::fs::read_to_string(out.path.join("built/client.js"))
+        .expect("the build wrote a client module");
+    assert!(
+        client.contains("content/note.md"),
+        "the build capability found nothing:\n{client}"
+    );
+}

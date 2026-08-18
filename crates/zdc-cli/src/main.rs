@@ -705,7 +705,7 @@ fn evaluate_build_root(
     match zdc_codegen::build_module(inputs, options) {
         Ok(None) => Ok(zdc_codegen::Evaluated::default()),
         Ok(Some(module)) => {
-            let directory = file.parent().unwrap_or(Path::new("."));
+            let directory = zdc_hir::sandbox::directory_of(file);
             match zdc_codegen::evaluate(&module, directory) {
                 Ok(evaluated) => Ok(evaluated),
                 Err(error) => {
@@ -1252,7 +1252,7 @@ fn test(file: &Path) -> ExitCode {
         return no_claims(&path);
     }
 
-    let directory = file.parent().unwrap_or(Path::new("."));
+    let directory = zdc_hir::sandbox::directory_of(file);
     let outcomes = match zdc_codegen::run_tests(&module, directory) {
         Ok(outcomes) => outcomes,
         // The module would not even load, so no claim was reached. One

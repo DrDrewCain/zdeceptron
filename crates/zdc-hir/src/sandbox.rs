@@ -96,15 +96,32 @@ impl Refusal {
 /// file" still decides what a specifier *names*, while this decides what
 /// the build may *open*, and the second no longer moves.
 pub fn project_root(entry: &Path) -> PathBuf {
-    let directory = entry.parent().unwrap_or(Path::new("."));
-    let directory = if directory.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        directory
-    };
+    let directory = directory_of(entry);
     directory
         .canonicalize()
         .unwrap_or_else(|_| directory.to_path_buf())
+}
+
+/// The directory an entry file sits in, as a path something can open.
+///
+/// **`Path::parent` of a bare filename is `Some("")`, not `None`.** That is
+/// the whole of this function. `"br.zd".parent()` is an empty path, an
+/// empty path canonicalises to nothing, and the ordinary
+/// `parent().unwrap_or(Path::new("."))` guards the case that does not
+/// happen while missing the one that does — so `zdc build br.zd` refused
+/// every program using a build capability with "the project directory ``
+/// could not be resolved", while `zdc build ./br.zd` and an absolute path
+/// both worked.
+///
+/// It is a shared helper rather than the same two lines at each site
+/// because it was already written twice — here and in `zdc-resolve`'s
+/// `beside` — and missing at three others, which is how one spelling of a
+/// hazard becomes a bug somewhere else.
+pub fn directory_of(entry: &Path) -> &Path {
+    match entry.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        Some(_) | None => Path::new("."),
+    }
 }
 
 /// Both layers of the rule. `None` means the build may open `target`.

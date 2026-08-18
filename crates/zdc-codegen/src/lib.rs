@@ -94,7 +94,7 @@ pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // information-flow pass and this crate both rule on the same URLs and
 // neither crate depends on the other. Re-exported rather than restated
 // so a caller here reads the same list the flow pass does.
-pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
+pub use zdc_hir::{sandbox::directory_of, url_is_safe, url_scheme, URL_SCHEMES};
 // Which build the runtime is emitted for (#140). Re-exported so a caller
 // that already depends on this crate does not have to add a dependency on
 // `zdc-runtime` to name the mode it wants.

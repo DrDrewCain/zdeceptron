@@ -225,7 +225,7 @@ total in prose is a number nobody re-derives.
 | `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 156 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-cli` | 157 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |

@@ -385,7 +385,7 @@ impl Loader {
             }
         };
 
-        let directory = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let directory = zdc_hir::sandbox::directory_of(path).to_path_buf();
         for decl in &program.decls {
             let Decl::Use(import) = decl else { continue };
             let target = directory.join(format!("{}.zd", import.path));
