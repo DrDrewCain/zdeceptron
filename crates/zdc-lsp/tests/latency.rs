@@ -13,33 +13,59 @@
 //!
 //! and it prints one row per program size: the whole analysis, the analysis
 //! without the emitter, and the difference. A debug build is one to two
-//! orders of magnitude slower here — 4.5 seconds for the largest program
-//! against 95 milliseconds — so under `cargo test` it prints the small
-//! sizes and asserts nothing, and the release invocation above is the one
-//! whose numbers are worth reading.
+//! orders of magnitude slower here — seconds where release is milliseconds
+//! — so under `cargo test` it prints the small sizes and asserts nothing,
+//! and the release invocation above is the one whose numbers are worth
+//! reading.
 //!
-//! **What it found.** Emission is not a fraction of the front end; it is
-//! most of the cost, and it grows faster than linearly in the size of the
-//! view. On this machine, in release:
+//! **The `codegen` column is a subtraction, and it used to subtract the
+//! wrong thing.** `front_end_only` compiled the file on its own;
+//! `Analysis::of` compiles it against the prelude. So the whole cost of
+//! analysing §17.4.1's library — 150 definitions and 1,200 expressions
+//! that are there whatever the file says — fell out of the subtraction and
+//! landed in the emitter's column, which read 98% at six kilobytes and was
+//! believed. Both sides now compile the same program. Nothing about the
+//! `full` column changed; it was never wrong, and the budget below is
+//! asserted against it and only against it.
+//!
+//! **What the corrected instrument found**, on this machine, in release,
+//! before either of issue #8's fixes:
 //!
 //! ```text
 //!   rows    bytes          full     front end       codegen     share
-//!      1      128       0.041ms       0.013ms       0.028ms     68.8%
-//!     10     1136       0.188ms       0.080ms       0.108ms     57.3%
-//!     50     5776       1.040ms       0.352ms       0.688ms     66.1%
-//!    200    23576      11.859ms       1.338ms      10.522ms     88.7%
-//!    500    59576     114.729ms       2.973ms     111.755ms     97.4%
+//!      1      128      17.663ms      17.227ms       0.437ms      2.5%
+//!     10     1136      17.473ms      17.057ms       0.416ms      2.4%
+//!     50     5776      18.616ms      17.474ms       1.141ms      6.1%
+//!    200    23576      26.091ms      19.144ms       6.947ms     26.6%
+//!    500    59576      94.958ms      21.857ms      73.100ms     77.0%
 //! ```
 //!
-//! The front end is linear; the emitter is close to quadratic. That cost is
-//! not new — `zdc build` has always paid it — but the language server now
-//! pays it on every keystroke, so it is written down here rather than
-//! discovered later. At the size of file this language is for it does not
-//! matter: the largest checked-in example is under three kilobytes, and a
-//! six-kilobyte file is one millisecond. A sixty-kilobyte one is a tenth of
-//! a second, which is the point at which typing would feel it, and the fix
-//! then is to make the emitter linear rather than to hide it from the
-//! editor.
+//! Two costs, not one, and they are different in kind. The emitter really
+//! was superlinear — 1.1ms to 73ms over a tenfold view — and that is issue
+//! #8's quadratic. But at the size a person edits it was not what a
+//! keystroke was spent on: 17ms of it was **flat**, paid on a 128-byte
+//! file as fully as on a 60-kilobyte one, because it is the prelude being
+//! re-analysed from scratch every time. Optimising the emitter alone would
+//! have moved the six-kilobyte row by one millisecond in twenty.
+//!
+//! After both — the emitter's walk scheduling routed rather than searched,
+//! and the flow pass's witness reconstruction run only where a leak is
+//! possible:
+//!
+//! ```text
+//!   rows    bytes          full     front end       codegen     share
+//!      1      128       6.744ms       6.081ms       0.663ms      9.8%
+//!     10     1136       6.586ms       6.061ms       0.525ms      8.0%
+//!     50     5776       7.196ms       6.398ms       0.798ms     11.1%
+//!    200    23576       9.355ms       7.796ms       1.559ms     16.7%
+//!    500    59576      14.486ms      10.568ms       3.918ms     27.0%
+//! ```
+//!
+//! A sixty-kilobyte file is now 14ms rather than 95, and the growth in it
+//! is linear in both columns. What is left of the flat cost is about six
+//! milliseconds of prelude — resolve, split, typecheck and what remains of
+//! the flow pass — and it is the next thing to spend effort on, because it
+//! is now the whole of the budget below at every size a person types.
 //!
 //! The assertion below is therefore an editor-responsiveness budget at a
 //! realistic size, not a ratio. A ratio would fail on a loaded machine and
@@ -69,11 +95,20 @@ fn program(rows: usize) -> String {
 }
 
 /// The passes before codegen, written out rather than called.
+///
+/// **Resolved against the prelude, because `Analysis::of` is.** It was not,
+/// and that one difference is why the `codegen` column below used to read
+/// 99%: `Resolver::new` compiles the file alone, `Resolver::with_prelude`
+/// compiles it with §17.4.1's library — 150-odd more definitions and 1,200
+/// more expressions — and every front-end pass then walks all of them. The
+/// subtraction charged that difference to the emitter, which is the one
+/// pass it is not.
 fn front_end_only(source: &str) -> bool {
     let Ok(program) = zdc_parser::parse(source) else {
         return false;
     };
-    let Ok(hir) = zdc_resolve::Resolver::new(&program).resolve() else {
+    let prelude = zdc_lib::load();
+    let Ok(hir) = zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve() else {
         return false;
     };
     let split = zdc_graph::split(&hir);

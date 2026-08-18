@@ -474,6 +474,39 @@ fn survey_compiler_asymptotics() {
     }
 }
 
+/// Compile time against the size of the *view*, which is the axis the two
+/// surveys above hold fixed.
+///
+/// `split` and `ifc` are functions of the definition set and the root set,
+/// and `program_with_roots` varies exactly those. Neither of them says
+/// anything about a program that is one root and a great deal of markup —
+/// which is the shape a person actually types, and the shape the editor
+/// re-analyses on every keystroke. This survey varies the view and leaves
+/// everything else alone.
+///
+/// It is the survey that found issue #8's quadratic, and it is here rather
+/// than in a comment because the emitter's cost is invisible to every other
+/// measurement in this file: the walk it schedules comes out the same
+/// however long the scheduling takes, so no byte count could see it.
+#[test]
+#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]
+fn survey_emitter_growth() {
+    println!(
+        "\n{:>8} {:>8} {:>11} {:>12} {:>10}",
+        "signals", "nodes", "client.js", "emit", "us/node"
+    );
+    for n in [8usize, 16, 32, 64, 128, 256, 512, 1024] {
+        let measured = zdc_bench::time_emission(&program_with_signals(n), "growth.zd", 5);
+        println!(
+            "{n:>8} {:>8} {:>11} {:>10.3}ms {:>10.2}",
+            measured.nodes,
+            measured.client_js,
+            measured.emit.as_secs_f64() * 1e3,
+            measured.per_node(),
+        );
+    }
+}
+
 // --- components (spec §16.10, issue #209) --------------------------------
 //
 // §16.10 states the components trade-off as a dilemma and does not say

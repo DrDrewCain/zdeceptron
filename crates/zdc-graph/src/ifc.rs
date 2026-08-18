@@ -414,7 +414,9 @@ impl<'a> Ifc<'a> {
     fn run(mut self) -> Verdict {
         self.declare();
         self.summarise();
-        self.reconstruct_param_paths();
+        if self.a_secret_exists() {
+            self.reconstruct_param_paths();
+        }
         self.discharge();
         self.live_sync();
         self.response_bodies();
@@ -620,12 +622,51 @@ impl<'a> Ifc<'a> {
         }
     }
 
+    /// Whether anything in this program can be secret at all.
+    ///
+    /// Two constructs make a value secret without being handed one: a
+    /// `secret` declaration, which `declare` has already recorded, and
+    /// `environment`, which is secret whether or not anybody said so
+    /// (§5.6). Every other secret in the pass is one of those two joined
+    /// onto something, so a program with neither has no concretely secret
+    /// value anywhere and nothing for a witness to describe.
+    ///
+    /// **This is the reader's own premise, hoisted.** `Walk::witness_for`
+    /// returns before it consults a parameter path unless the argument in
+    /// hand is concretely secret, so on a program with no secret the
+    /// reconstruction below is computed in full and read zero times. It is
+    /// not a second, weaker flow analysis and it decides no verdict: the
+    /// obligations, the diagnostics and the clearance are whatever the
+    /// pass makes of them either way. It decides only whether the
+    /// explanations are built.
+    ///
+    /// What it is worth: the prelude is 150-odd functions compiled with
+    /// every program (§17.4.1), none of them mentioning a secret, and the
+    /// language server runs this pass on every keystroke.
+    fn a_secret_exists(&self) -> bool {
+        self.declared.values().any(|label| {
+            Obs::ALL
+                .iter()
+                .any(|obs| label.get(*obs) == Secrecy::Secret)
+        }) || self
+            .hir
+            .exprs
+            .iter()
+            .any(|(_, expr)| matches!(expr.kind, HirExprKind::Environment(_)))
+    }
+
     /// §17.3.4's witness reconstruction, done **after** convergence.
     ///
     /// One concrete re-walk per parameter, with that parameter marked
     /// Secret and everything else Public, recording the path its taint
     /// takes to the result. Breadth is unnecessary: the walk is over a
     /// tree, so the path it records is the only one.
+    ///
+    /// Run only where [`Ifc::a_secret_exists`] says a witness could ever
+    /// be asked for. Each re-walk is a *traced* walk, and a traced walk
+    /// re-solves every callee three levels deep, so this is the most
+    /// expensive phase in the pass by an order of magnitude and the one
+    /// with nothing to show for it on the programs people mostly edit.
     fn reconstruct_param_paths(&mut self) {
         let keys: Vec<(DefId, Ctx)> = self.summaries.keys().copied().collect();
         for (def, ctx) in keys {

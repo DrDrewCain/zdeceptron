@@ -61,7 +61,7 @@ no evidence is marked not done, regardless of what any other document says.
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 865 tests, `zdc-runtime` 74 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine, and since #135 run those suites against the **minified** release build as well as the source, so the bundle a reader downloads is executed rather than only measured), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 865 tests, `zdc-runtime` 74 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine, and since #135 run those suites against the **minified** release build as well as the source, so the bundle a reader downloads is executed rather than only measured), `zdc-bench` 51 (four of them ignored surveys, one of which times the emitter against the size of a view). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
@@ -221,7 +221,7 @@ the total had grown from about 1,546 to 2,661.
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
-| `zdc-bench` | 50 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
+| `zdc-bench` | 51 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
 | `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 62 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
@@ -232,11 +232,19 @@ the total had grown from about 1,546 to 2,661.
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
-### The five deliberate ignores, each with a written reason
+### The six deliberate ignores, each with a written reason
 
-Three are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each carrying
+Four are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each carrying
 `#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]`. They print the scaling
 survey rather than asserting on it, and are reports rather than gates.
+
+**`survey_emitter_growth` is the newest of the four (#8), and it is ignored for a second reason
+worth stating.** It times the emitter against the size of a view, and being wall-clock it cannot
+be a gate for the reason the other three cannot. But it is also the survey that found a cubic
+path scheduler no *deterministic* gate in this repository could have seen, because the walk the
+emitter schedules comes out byte-identical however long the scheduling takes. That is a gap this
+file should name rather than leave implied: the emitter's own cost is invisible to every byte
+count here, and a printed column is currently the only instrument that reports it.
 
 **The fourth this file used to name is gone.** It was in
 `crates/zdc-codegen/tests/emission.rs`, recording that `zdc check` accepted a program `zdc
@@ -336,13 +344,30 @@ message names `99999999999999991611392`, which is what the machine holds.
 
 Named rather than cited by line: the numbers here moved twice while the claims stayed still.
 
-### The emitter is near-quadratic in view size
+### ~~The emitter is near-quadratic in view size~~ — fixed, and it was the wrong pass (#8)
 
-Documented in its own source: `crates/zdc-codegen/src/analysis.rs:110,117,275` and
-`crates/zdc-codegen/src/lib.rs:372` say "quadratic in definitions × pages", "quadratic in
-functions", and "split is already quadratic in definitions × roots". `BENCHMARKS.md` measures
-it. It is real and documented; at present view sizes it is not felt. **The cost lands per
-keystroke in the editor**, because the language server runs the real passes.
+This section used to cite three source comments — "quadratic in definitions × pages",
+"quadratic in functions", "split is already quadratic in definitions × roots" — as evidence
+that the *emitter* was near-quadratic in view size. All three comments are accurate and none of
+them is about that. They describe the tier split and the per-page analysis, which are functions
+of the definition and root sets; on the program that was actually slow, `split` was 0.3 ms of
+18.8.
+
+What was superlinear is the emitter's **path scheduling**, and it was cubic rather than
+quadratic: it ran a breadth-first search for the shortest walk between two nodes of a structure
+that has exactly one walk between any two nodes it connects, once per node already named. It is
+now a climb up a parent chain. Emission is byte-identical.
+
+**The cost landed per keystroke in the editor**, because the language server runs the real
+passes, and that is where it was found: a six-kilobyte file is 7.2 ms against 18.8, and a
+sixty-kilobyte one 14.5 ms against 95. Two thirds of the old figure was not the emitter at all
+but §17.3.4's witness reconstruction in the flow pass, which now runs only on a program that has
+a secret to explain. `BENCHMARKS.md` has both sets of numbers and how the measurement that
+pointed at the wrong pass was itself wrong.
+
+**What is left is flat.** Six of the remaining 7.2 ms does not depend on the file's size: it is
+§17.4.1's prelude, re-analysed from nothing on every keystroke. There is no incremental pipeline
+for it to be kept in.
 
 ### The following syntax is refused
 

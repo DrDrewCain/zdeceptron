@@ -14,7 +14,7 @@
 //! a failure with no compile-time signal, because the offsets simply point
 //! at the wrong node (§16.10).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use zdc_hir::{
     DefId, DefKind, ExprId, HirArg, HirElement, HirExprKind, HirHandler, HirNode, HirNodeArmBody,
@@ -3329,13 +3329,33 @@ impl Step {
 
 /// A region flattened into the graph the walk actually traverses:
 /// `firstChild` and `nextSibling` edges, and nothing else. There is no edge
-/// upward, which is why a base is chosen by shortest path rather than by
-/// tree ancestry.
+/// upward, which is why a base is chosen by what can reach a node rather
+/// than by tree ancestry — a node's tree parent and its previous sibling
+/// are both above it in the document and only one of them can get to it.
+///
+/// **Those two edges make a binary tree**, the left-child/right-sibling
+/// encoding, rooted at node 0 — every node is reached from the first root
+/// by descending and going right, and `Emission::region` relies on that
+/// where it expects the fragment to reach everything. A binary tree has
+/// exactly one path between any two nodes it connects at all, so a search
+/// for the *shortest* walk was searching a set with one element in it.
+/// `parent` and `depth` below record that one path once, at build time,
+/// and turn every routing question into a walk up a chain no longer than
+/// the answer it returns.
 struct Graph {
     /// Pre-order, so index order is document order.
     addresses: Vec<Address>,
     first_child: Vec<Option<usize>>,
     next_sibling: Vec<Option<usize>>,
+    /// The step that reaches this node, and where it comes from. `None`
+    /// for node 0, which is the only node nothing reaches.
+    parent: Vec<Option<(usize, Step)>>,
+    /// Distance from node 0. A route's length is the difference of two of
+    /// these, which is what lets a walk stop as soon as it has one.
+    depth: Vec<u32>,
+    /// Address to node, because every bind names its target by address and
+    /// scanning for it made the emission quadratic in the size of a view.
+    by_address: HashMap<Address, usize>,
 }
 
 impl Graph {
@@ -3344,9 +3364,33 @@ impl Graph {
             addresses: Vec::new(),
             first_child: Vec::new(),
             next_sibling: Vec::new(),
+            parent: Vec::new(),
+            depth: Vec::new(),
+            by_address: HashMap::new(),
         };
         let mut path = Vec::new();
         graph.add_siblings(roots, &mut path);
+
+        graph.parent = vec![None; graph.addresses.len()];
+        graph.depth = vec![0; graph.addresses.len()];
+        // Both edges run to a *later* node in pre-order, so one forward
+        // pass sees every parent before the child it names.
+        for id in 0..graph.addresses.len() {
+            for (next, step) in [
+                (graph.first_child[id], Step::FirstChild),
+                (graph.next_sibling[id], Step::NextSibling),
+            ] {
+                let Some(next) = next else { continue };
+                graph.parent[next] = Some((id, step));
+                graph.depth[next] = graph.depth[id] + 1;
+            }
+        }
+        graph.by_address = graph
+            .addresses
+            .iter()
+            .enumerate()
+            .map(|(id, address)| (address.clone(), id))
+            .collect();
         graph
     }
 
@@ -3373,42 +3417,54 @@ impl Graph {
     }
 
     fn id_of(&self, address: &[usize]) -> Option<usize> {
-        self.addresses.iter().position(|a| a == address)
+        self.by_address.get(address).copied()
     }
 
-    /// The shortest walk from `from` to `to`, or `None` if `to` is not
+    /// The only walk from `from` to `to`, or `None` if `to` is not
     /// reachable — a walk can descend and go right, never left or up.
+    ///
+    /// Climbed from `to` rather than searched from `from`: the two edges
+    /// make a binary tree, so `to` is reachable exactly when `from` is one
+    /// of the nodes on its parent chain, and the walk that gets there is
+    /// that stretch of chain reversed. The breadth-first search this
+    /// replaces allocated two vectors the size of the whole region per
+    /// call and visited every node between the two.
     fn route(&self, from: usize, to: usize) -> Option<Vec<Step>> {
-        if from == to {
-            return Some(Vec::new());
+        if self.depth[to] < self.depth[from] {
+            return None;
         }
-        let mut previous: Vec<Option<(usize, Step)>> = vec![None; self.addresses.len()];
-        let mut seen = vec![false; self.addresses.len()];
-        let mut queue = VecDeque::from([from]);
-        seen[from] = true;
+        let mut steps = Vec::with_capacity((self.depth[to] - self.depth[from]) as usize);
+        let mut cursor = to;
+        while cursor != from {
+            let (parent, step) = self.parent[cursor]?;
+            steps.push(step);
+            cursor = parent;
+        }
+        steps.reverse();
+        Some(steps)
+    }
 
-        while let Some(node) = queue.pop_front() {
-            for (next, step) in [
-                (self.first_child[node], Step::FirstChild),
-                (self.next_sibling[node], Step::NextSibling),
-            ] {
-                let Some(next) = next else { continue };
-                if seen[next] {
-                    continue;
-                }
-                seen[next] = true;
-                previous[next] = Some((node, step));
-                if next == to {
-                    let mut steps = Vec::new();
-                    let mut cursor = to;
-                    while let Some((parent, step)) = previous[cursor] {
-                        steps.push(step);
-                        cursor = parent;
-                    }
-                    steps.reverse();
-                    return Some(steps);
-                }
-                queue.push_back(next);
+    /// The nearest node at or above `id` that already has a name, and the
+    /// walk down to `id` from it.
+    ///
+    /// The chain from `id` upward passes every candidate base in order of
+    /// increasing distance, so the first named node on it is the closest
+    /// one there is; nothing else has to be considered, let alone routed
+    /// to. The climb is never longer than the walk it hands back, which is
+    /// what makes naming a whole region cost the size of what it prints.
+    fn nearest_named<'n>(
+        &self,
+        named: &'n [Option<String>],
+        id: usize,
+    ) -> Option<(&'n str, Vec<Step>)> {
+        let mut steps = Vec::new();
+        let mut cursor = id;
+        while let Some((parent, step)) = self.parent[cursor] {
+            steps.push(step);
+            cursor = parent;
+            if let Some(name) = named.get(cursor).and_then(Option::as_ref) {
+                steps.reverse();
+                return Some((name, steps));
             }
         }
         None
@@ -3677,12 +3733,14 @@ impl<'u> Emission<'u> {
         // Name every anchor, plus every root a walk has to pass through to
         // reach one. A region with no bindings names nothing at all.
         let mut named: Vec<usize> = sites.iter().map(|site| site.anchor).collect();
-        if !named.is_empty() {
-            let roots: Vec<usize> = (0..graph.addresses.len())
-                .filter(|id| graph.addresses[*id].len() == 1)
-                .collect();
-            for root in roots {
-                if sites.iter().any(|site| is_under(&graph, root, site.anchor)) {
+        // A root a walk passes through is the root the anchor sits under,
+        // and an address names it: the anchor's own first component. Asking
+        // each root whether *any* site is under it instead compared every
+        // root against every site, which is a product this can read off.
+        for site in &sites {
+            let address = &graph.addresses[site.anchor];
+            if address.len() > 1 {
+                if let Some(root) = graph.id_of(&address[..1]) {
                     named.push(root);
                 }
             }
@@ -3690,13 +3748,15 @@ impl<'u> Emission<'u> {
         named.sort_unstable();
         named.dedup();
 
-        let mut assigned: Vec<(usize, String)> = Vec::new();
+        // Indexed by node rather than searched, so neither naming a node
+        // nor attaching a binding to one scans what has been named so far.
+        let mut assigned: Vec<Option<String>> = vec![None; graph.addresses.len()];
         for id in named {
             let name = format!("$n{}", self.locals);
             self.locals += 1;
             let chain = shortest_chain(&graph, &assigned, fragment, id);
             out.push_str(&format!("{pad}const {name} = {chain};\n"));
-            assigned.push((id, name));
+            assigned[id] = Some(name);
         }
 
         // Bindings in document order, and in declaration order within a node.
@@ -3705,10 +3765,8 @@ impl<'u> Emission<'u> {
 
         for index in order {
             let kind = sites[index].kind.clone();
-            let mut target = assigned
-                .iter()
-                .find(|(node, _)| *node == sites[index].anchor)
-                .map(|(_, name)| name.clone())
+            let mut target = assigned[sites[index].anchor]
+                .clone()
                 .expect("every anchor was named");
             for step in &sites[index].suffix {
                 target.push('.');
@@ -3886,38 +3944,20 @@ impl<'u> Emission<'u> {
 /// five independent chains: fewer property loads, and every receiver comes
 /// from a clone of a fixed template, so each access site sees exactly one
 /// hidden class.
-fn shortest_chain(
-    graph: &Graph,
-    assigned: &[(usize, String)],
-    fragment: &str,
-    id: usize,
-) -> String {
-    let mut best: Option<(usize, String, Vec<Step>)> = None;
-    for (base, name) in assigned {
-        let Some(steps) = graph.route(*base, id) else {
-            continue;
-        };
-        // A tie goes to the most recently named base, which is the one
-        // document order has just walked past.
-        if best
-            .as_ref()
-            .is_none_or(|(length, _, _)| steps.len() <= *length)
-        {
-            best = Some((steps.len(), name.clone(), steps));
-        }
+fn shortest_chain(graph: &Graph, assigned: &[Option<String>], fragment: &str, id: usize) -> String {
+    // Only a node *above* `id` can reach it, and the ones that do form a
+    // single chain, so the nearest named node on that chain beats every
+    // other base there is. Going through the fragment costs one step more
+    // than starting at node 0 does, so it never beats a named base and is
+    // reached for exactly when there is none.
+    if let Some((name, steps)) = graph.nearest_named(assigned, id) {
+        return chain_from(name.to_string(), &steps);
     }
 
-    // The fragment reaches root 0 by `firstChild`, and everything else
-    // from there, so it is always a fallback and sometimes the shortest.
-    if let Some(steps) = graph.route(0, id) {
-        let length = steps.len() + 1;
-        if best.as_ref().is_none_or(|(best, _, _)| length < *best) {
-            return chain_from(format!("{fragment}.firstChild"), &steps);
-        }
-    }
-
-    let (_, name, steps) = best.expect("a node is reachable from the fragment");
-    chain_from(name, &steps)
+    let steps = graph
+        .route(0, id)
+        .expect("a node is reachable from the fragment");
+    chain_from(format!("{fragment}.firstChild"), &steps)
 }
 
 fn chain_from(base: String, steps: &[Step]) -> String {
@@ -3927,14 +3967,6 @@ fn chain_from(base: String, steps: &[Step]) -> String {
         chain.push_str(step.property());
     }
     chain
-}
-
-/// Whether `anchor` sits strictly inside the subtree rooted at `root`.
-fn is_under(graph: &Graph, root: usize, anchor: usize) -> bool {
-    let root_address = &graph.addresses[root];
-    let anchor_address = &graph.addresses[anchor];
-    anchor_address.len() > root_address.len()
-        && anchor_address[..root_address.len()] == root_address[..]
 }
 
 fn node_at<'t>(roots: &'t [Tpl], address: &[usize]) -> Option<&'t Tpl> {

@@ -159,16 +159,31 @@ and whatever it finds will apply to the other three.
 
 ---
 
-## 8. Reduce the emitter's quadratic, once it is felt
+## 8. ~~Reduce the emitter's quadratic, once it is felt~~ — **landed**
 
-The emitter is near-quadratic in view size, documented in its own source
-(`crates/zdc-codegen/src/analysis.rs:109,116,271`, `lib.rs:300`) and measured in
-`BENCHMARKS.md`. It is real and it is not yet felt at present view sizes.
+It was felt, at 18.8 ms per keystroke against a 10 ms budget, and it is now 7.2 ms.
+`BENCHMARKS.md` has the before and after; what belongs here is the part that was wrong, because
+this entry was written to make sure the right pass got optimised and it named the wrong one.
 
-What changes the urgency is that **the editor runs the real passes, so the cost lands per
-keystroke.** Optimise the right pass when it comes to that: the measurements say the cost is in
-the *split*, and that the information-flow pass is essentially insensitive to root count. Anyone
-optimising `ifc` would be optimising the pass that is not the problem.
+**"The measurements say the cost is in the *split*"** — they did not, and could not have. The
+survey that says so varies definitions and roots and holds a view at one `Text` per root, so it
+never measured the axis this entry is about. The cost was in the emitter's *path scheduling*,
+which was cubic in view size and invisible to every gate in the suite, because the walk it
+schedules comes out identical however long the scheduling takes. `split` was 0.3 ms of the 18.8.
+
+**"Anyone optimising `ifc` would be optimising the pass that is not the problem"** — `ifc` was
+two thirds of a keystroke. The finding that entry rests on says `ifc` is insensitive to *root
+count*, which is true and is not the same claim. What made it slow is a phase that walks the
+whole program once per function parameter, over a prelude compiled with every program.
+
+The lesson for the next entry of this kind: an entry that names the pass to optimise is only as
+good as the axis the measurement varied, and this one named a pass from a survey that was
+holding the interesting variable fixed.
+
+What remains, and is not this item: **six of the 7.2 ms is flat in the size of the file** —
+`hello.zd` and a sixty-kilobyte program cost the same — because §17.4.1's prelude is resolved,
+split, typechecked and flow-analysed from nothing on every keystroke. No further work on the
+emitter reaches it. What reaches it is somewhere to keep an answer between keystrokes.
 
 ---
 
