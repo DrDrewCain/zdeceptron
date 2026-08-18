@@ -425,26 +425,27 @@ fn a_document_carries_its_first_paint() {
     );
 }
 
-/// And the module builds its own tree over what it finds, rather than
-/// binding to it.
+/// And the module **binds against** what it finds, rather than building a
+/// second tree over it (#208).
 ///
-/// This asserted the opposite for a while, and the opposite was wrong. The
-/// reasoning was that the painted markup came from this same template, so
-/// the container's children are the template's roots and a walk lands on
-/// the same nodes either way — true of the static markup and false of
-/// every region in it. A region is two anchor comments that a clone leaves
-/// *adjacent* and a painted document has content between, so
-/// `$n.nextSibling` finds the first row instead of the closing anchor and
-/// the binder inserts its own rows beside content it never accounted for.
-/// Measured on `examples/writing.zd`: the list in the document twice.
+/// This asserted the opposite twice, and each time the opposite was right
+/// when it was written. The first version bound against a painted
+/// container unconditionally, which was wrong: a region is two anchor
+/// comments that a clone leaves *adjacent* and a painted document has
+/// content between, so `$n.nextSibling` found the first row instead of the
+/// closing anchor and the binder inserted its own rows beside content it
+/// never accounted for — the list in the document twice. The second
+/// mounted a fresh tree always, which was correct and threw the paint
+/// away.
 ///
-/// Nothing in the walk can tell the two anchors apart, so adoption needs
-/// anchors a walk can match — issue #208's third emission mode. Until then
-/// the client mounts, and what the painted markup buys is undiminished:
-/// the *document* arrives with the page in it, and the replacement runs in
-/// the task that loaded the module, before any paint of its own.
+/// What makes the third right is `adopt.js`: every served region is lifted
+/// out from between its anchors before any walk runs, so the served tree
+/// has the template's shape and every address in it means what it always
+/// meant. The emission below is the whole of it for a view with no holes —
+/// there is no region to lift, so the root names no module and asks one
+/// question.
 #[test]
-fn the_root_mounts_its_own_tree_over_the_painted_one() {
+fn the_root_binds_against_the_painted_tree() {
     let bundle = support::compile_source(
         "state count is client Whole starting 1\n\
          view\n\
@@ -454,13 +455,58 @@ fn the_root_mounts_its_own_tree_over_the_painted_one() {
     assert!(
         bundle
             .client_js
-            .contains("mount($t0(), container);\n  const $r = container;"),
-        "the root must mount its own tree:\n{}",
+            .contains("const $r = container;\n  if ($r.firstChild === null) mount($t0(), $r);"),
+        "the root must bind against a painted container and clone only into an \
+         empty one:\n{}",
+        bundle.client_js
+    );
+    // A view with no holes has no region to lift, so it must not reach for
+    // the module that lifts them. The null program is such a program and
+    // `a_null_program_links_two_runtime_files` is what that costs.
+    assert!(
+        !bundle.client_js.contains("adopt.js"),
+        "a view with no holes in it has nothing to adopt beyond its own roots, \
+         and must not link the hydrator:\n{}",
+        bundle.client_js
+    );
+}
+
+/// A view **with** a hole links it, and hands the region over.
+///
+/// The other half, and the half that makes the line above honest: the
+/// module is kept out of a bundle that cannot use it, not out of one that
+/// can.
+#[test]
+fn a_view_with_a_hole_links_the_hydrator_and_takes_a_served_region() {
+    let bundle = support::compile_source(
+        "state items is client List of Text starting [\"a\"]\n\
+         view\n\
+         \x20   Column\n\
+         \x20       each item in items\n\
+         \x20           Text item\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("const $r = adopt(container, $t0);"),
+        "a root with a hole must adopt through the module that lifts regions:\n{}",
         bundle.client_js
     );
     assert!(
-        !bundle.client_js.contains("container.firstChild"),
-        "a conditional mount is the adoption this emitter cannot do correctly:\n{}",
+        bundle.client_js.contains("/adopt.js"),
+        "and must link it:\n{}",
+        bundle.client_js
+    );
+    // The row's served nodes arrive as the closure's last parameter, and
+    // the row's prologue takes them in the clone's place.
+    assert!(
+        bundle.client_js.contains("(item, $s0) => {"),
+        "a row must be handed what the build painted for it:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("const $r0 = $s0 ?? $t1();"),
+        "and must bind over it rather than cloning:\n{}",
         bundle.client_js
     );
 }

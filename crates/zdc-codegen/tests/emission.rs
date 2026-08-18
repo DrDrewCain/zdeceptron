@@ -28,8 +28,8 @@ const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type=
 const [name, setName] = signal('world');
 
 export function main(container) {
-  mount($t0(), container);
   const $r = container;
+  if ($r.firstChild === null) mount($t0(), $r);
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
@@ -58,8 +58,8 @@ const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);
 
 export function main(container) {
-  mount($t0(), container);
   const $r = container;
+  if ($r.firstChild === null) mount($t0(), $r);
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
@@ -555,19 +555,23 @@ fn a_view_position_when_becomes_a_hole_and_one_template_per_arm() {
          \x20           Loud show Text \"loud\"\n",
     );
     let client = &bundle.client_js;
-    assert!(client.contains("<!----><!---->"), "{client}");
+    assert!(client.contains("<!--[--><!--]-->"), "{client}");
     // Bare, never `() => mood()`: `read` unwraps exactly one level.
     assert!(
         client.contains("whenInto($n1, $n1.nextSibling, mood, {"),
         "{client}"
     );
-    assert!(client.contains("'Calm': () => {"), "{client}");
+    // The trailing parameter is what the build painted for this arm (#208),
+    // `undefined` when it painted nothing.
+    assert!(client.contains("'Calm': ($s0) => {"), "{client}");
     assert_eq!(client.matches("template(").count(), 3, "{client}");
 }
 
 /// A variant's binders are positional over its declared fields, and the
-/// arm is written with exactly that many parameters so
-/// `Function.prototype.length` is the arity `whenInto` relies on.
+/// arm is written with exactly that many parameters — plus the trailing
+/// one carrying the nodes the build painted for this arm (#208), which is
+/// last precisely so the declared fields keep the positions §14G.1.6 gives
+/// them.
 #[test]
 fn a_when_arms_binders_are_the_variants_fields_positionally() {
     let bundle = compile_source(
@@ -584,7 +588,10 @@ fn a_when_arms_binders_are_the_variants_fields_positionally() {
          \x20               Text level\n",
     );
     let client = &bundle.client_js;
-    assert!(client.contains("'Spoken': (what, level) => {"), "{client}");
+    assert!(
+        client.contains("'Spoken': (what, level, $s1) => {"),
+        "{client}"
+    );
     assert!(
         client.contains("bindText($n2.firstChild, what)"),
         "{client}"
@@ -612,7 +619,7 @@ fn a_view_position_each_becomes_a_keyed_hole() {
         "{client}"
     );
     assert!(
-        client.contains("eachInto($n1, $n1.nextSibling, items, $byPosition, (item) => {"),
+        client.contains("eachInto($n1, $n1.nextSibling, items, $byPosition, (item, $s0) => {"),
         "{client}"
     );
     assert!(

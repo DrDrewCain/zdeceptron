@@ -58,7 +58,40 @@ enum Tpl {
     /// One half of a hole's anchor pair. `each` and `when` do not know
     /// their contents at parse time, so the markup carries two comments and
     /// the runtime fills the gap between them (spec §16.3.5).
-    Comment,
+    Anchor(Edge),
+}
+
+/// Which half of an anchor pair a comment is.
+///
+/// **The two are distinguishable in the markup, and that is what makes a
+/// served tree adoptable (#208).** A clone leaves a region's two anchors
+/// *adjacent*, so `start.nextSibling` is the end of the region and the
+/// walk needs no more than that. A prerendered document has the region's
+/// rendered content sitting between them, and a pair of identical empty
+/// comments gives a reader of that document no way to tell where the
+/// region stops — the earlier `<!---->` on both halves is exactly why the
+/// first attempt at adoption bound a list's rows to the anchors of the
+/// list and then inserted a second copy beside them.
+///
+/// One byte each, and it buys a document that describes its own shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Open,
+    Close,
+}
+
+impl Edge {
+    /// The comment's data, which is also what the runtime writes.
+    ///
+    /// A single character rather than a word: this is in the served bytes
+    /// once per hole and once more per row of every list, so the shortest
+    /// thing that can be told apart is the right thing.
+    fn mark(self) -> &'static str {
+        match self {
+            Edge::Open => "[",
+            Edge::Close => "]",
+        }
+    }
 }
 
 /// Where a node sits: an index into the region's roots, then one child
@@ -270,13 +303,33 @@ impl Region {
         })
     }
 
+    /// Whether this region holds a hole anywhere inside it.
+    ///
+    /// The question adoption turns on: a region with no anchors has no
+    /// region to lift out of a served document, so its walk lands on the
+    /// same nodes whether the tree was cloned or served, and it needs
+    /// nothing from `runtime/adopt.js`. That is not a micro-optimisation —
+    /// the null program the size gate is measured on is exactly such a
+    /// program, and `a_null_program_links_two_runtime_files` pins it to
+    /// `dom.js` and `signal.js`.
+    fn has_holes(&self) -> bool {
+        fn holed(node: &Tpl) -> bool {
+            match node {
+                Tpl::Anchor(_) => true,
+                Tpl::Element { children, .. } => children.iter().any(holed),
+                Tpl::Text(_) => false,
+            }
+        }
+        self.roots.iter().any(holed)
+    }
+
     /// Whether this region is one hole and nothing else.
     ///
     /// Such a region has no markup worth parsing, so `anchors()` builds its
     /// two comments directly rather than cloning a template made of them
     /// (spec §16.3.5 P2).
     fn is_only_anchors(&self) -> bool {
-        self.roots.len() == 2 && self.roots.iter().all(|root| matches!(root, Tpl::Comment))
+        self.roots.len() == 2 && self.roots.iter().all(|root| matches!(root, Tpl::Anchor(_)))
     }
 }
 
@@ -318,6 +371,22 @@ pub struct RuntimeImports {
     /// keystroke is a character somebody is typing. A program with no `on
     /// key` must ship neither (§16.3.1).
     pub keys: BTreeSet<&'static str>,
+    /// Taking over a served tree, from `runtime/adopt.js`.
+    ///
+    /// Separate from `dom` for the reason `branch` and `reconcile` are, and
+    /// with a sharper edge than either: a view with no holes in it has no
+    /// region to lift out of a served document, so its root adopts in two
+    /// lines of emitted code that name no module at all. The null program
+    /// the size gate is measured on is exactly such a program, and
+    /// `a_null_program_links_two_runtime_files` is what says so.
+    pub adopt: BTreeSet<&'static str>,
+    /// Variant dispatch and conditional rendering, from `runtime/branch.js`.
+    ///
+    /// Separate from `dom` for the reason `reconcile` is, and with the same
+    /// number behind it: `dom.js` ships with every program including the
+    /// null one the size gate is measured on, so a `when` dispatcher left
+    /// in it is downloaded by every page that has no `when`.
+    pub branch: BTreeSet<&'static str>,
     /// Keyed list reconciliation, from `runtime/list.js`.
     ///
     /// Separate from `dom` for the reason `lifecycle` and `rendered` are:
@@ -602,9 +671,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     let scrutinee = getter_source(self.emitter.operand(when.scrutinee));
                     let mut arms = Vec::with_capacity(when.arms.len());
                     for arm in &when.arms {
-                        // Exactly one parameter per declared field, so
-                        // `Function.prototype.length` is the variant's
-                        // arity — a contract `whenInto` relies on.
+                        // Exactly one parameter per declared field, in
+                        // declaration order, so `whenInto` can hand a
+                        // variant's fields over positionally. `closure`
+                        // appends one more for the served nodes (#208),
+                        // which is why the arm's `length` is the
+                        // variant's arity plus one and why nothing reads
+                        // it.
                         let binders: Vec<String> = arm
                             .bindings
                             .iter()
@@ -3224,8 +3297,8 @@ fn placed_elements<'n>(nodes: &'n [HirNode], out: &mut Vec<&'n HirElement>) {
 fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     let mut target = path.clone();
     target.push(index);
-    out.push(Tpl::Comment);
-    out.push(Tpl::Comment);
+    out.push(Tpl::Anchor(Edge::Open));
+    out.push(Tpl::Anchor(Edge::Close));
     target
 }
 
@@ -3366,7 +3439,11 @@ fn getter_source(operand: Operand) -> String {
 fn print_markup(node: &Tpl, out: &mut String) {
     match node {
         Tpl::Text(text) => out.push_str(&js::html_text(text)),
-        Tpl::Comment => out.push_str("<!---->"),
+        Tpl::Anchor(edge) => {
+            out.push_str("<!--");
+            out.push_str(edge.mark());
+            out.push_str("-->");
+        }
         Tpl::Element {
             tag,
             attributes,
@@ -3559,14 +3636,19 @@ impl<'u> Emission<'u> {
     ///
     /// **The return is emitted here because it depends on how the root was
     /// obtained.** A root bound to the container is already mounted and
-    /// has nothing to do; a root that cloned a fragment — which is every
-    /// region with no markup of its own, an `each` at the top of a view
-    /// among them — must mount *after* its bindings, because `mount`
+    /// has nothing to do; a root that cloned a fragment — a view with no
+    /// markup at all — must mount *after* its bindings, because `mount`
     /// inserts a fragment's children and empties the fragment.
     pub fn root_instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let adopting = self.can_adopt(region);
-        let mut out = self.instance_with(region, fragment, indent, adopting);
         let pad = " ".repeat(indent);
+        let mut out = if adopting {
+            self.root_template(region, fragment, indent)
+        } else {
+            self.clone_template(region, fragment, indent, None)
+        };
+        out.push_str(&self.locals(region, indent));
+        out.push_str(&self.region(region, fragment, indent));
         if adopting {
             out.push_str(&format!("{pad}return {fragment};\n"));
         } else {
@@ -3576,33 +3658,79 @@ impl<'u> Emission<'u> {
         out
     }
 
-    /// Whether this root has markup a prerender could have painted.
+    /// Whether this root can be bound against the container it is given.
     ///
-    /// A region that is nothing but anchors has none: `anchors()` builds
-    /// two comments and there is no template to compare a container
-    /// against, so it clones and mounts exactly as it always did.
+    /// Only a view with no markup at all cannot: there is nothing for a
+    /// build to have painted, so there is nothing to adopt and the region
+    /// is an empty fragment mounted after its bindings, exactly as before.
     fn can_adopt(&self, region: &Region) -> bool {
-        !region.roots.is_empty() && !region.is_only_anchors()
+        !region.roots.is_empty()
     }
 
-    fn instance_with(
-        &mut self,
-        region: &Region,
-        fragment: &str,
-        indent: usize,
-        adopting: bool,
-    ) -> String {
-        let mut out = if adopting {
-            self.adopt_template(region, fragment, indent)
-        } else {
-            self.clone_template(region, fragment, indent)
+    /// The root's markup: whatever the build painted, or a clone.
+    ///
+    /// # The third emission mode (#208)
+    ///
+    /// The prerender pass runs the emitted module against a shimmed DOM on
+    /// the build host and puts the markup it painted inside `<div id=app>`,
+    /// so on most loads the nodes are in the document before this module
+    /// runs. Binding against them rather than replacing them is what makes
+    /// the paint the client's tree instead of a picture of it.
+    ///
+    /// The reason this took a third mode rather than a conditional is
+    /// worth keeping written down, because the obvious version of it
+    /// shipped and was reverted. A region is a pair of anchor comments
+    /// that a clone leaves **adjacent**, and a prerendered document has
+    /// the region's rendered content sitting between them — so
+    /// `$n.nextSibling`, which the walk below uses for a region's closing
+    /// anchor, found the first served row instead, and the binder then
+    /// inserted its own rows beside content it never accounted for.
+    /// Measured on `examples/writing.zd`: 55 elements served, 52 more
+    /// built on top, the list in the document twice, and nothing thrown.
+    ///
+    /// What makes it work now is two changes that meet here:
+    ///
+    ///  * the anchors are **distinguishable** — `<!--[-->` and `<!--]-->`,
+    ///    see [`Edge`] — so the end of a region is a thing a reader of the
+    ///    served bytes can find rather than assume; and
+    ///  * `adopt` **lifts** every served region out from between its
+    ///    anchors before any walk runs, which leaves the two anchors
+    ///    adjacent and the served tree in exactly the shape the walk was
+    ///    written for.
+    ///
+    /// So the walk below is unchanged, and the failure mode when the Rust
+    /// serialiser and the browser's parser disagree is a region that
+    /// builds instead of adopting — never one that renders twice, because
+    /// a lifted region is detached and only a binder puts it back.
+    ///
+    /// A root with no holes needs none of that: there is no region to
+    /// lift, so it names no module and is two lines of emitted code. The
+    /// null program is such a program, and keeping it off `adopt.js` is
+    /// what keeps `a_null_program_links_two_runtime_files` true.
+    fn root_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        let build = self.template_call(region, indent);
+        if !region.has_holes() {
+            self.used.dom.insert("mount");
+            return format!(
+                "{pad}const {fragment} = container;\n\
+                 {pad}if ({fragment}.firstChild === null) mount({build}, {fragment});\n"
+            );
+        }
+        self.used.adopt.insert("adopt");
+        // The builder is passed rather than called: a served container is
+        // the common case and cloning a template nobody will use is the
+        // work this mode exists to save. `$tN` and `anchors` are already
+        // niladic, so naming one is exactly a builder and the common cases
+        // cost no arrow.
+        let thunk = match build.strip_suffix("()") {
+            Some(name) => name.to_string(),
+            None => format!("() => {build}"),
         };
-        out.push_str(&self.locals(region, indent));
-        out.push_str(&self.region(region, fragment, indent));
-        out
+        format!("{pad}const {fragment} = adopt(container, {thunk});\n")
     }
 
-    /// The signals this instance owns, declared before anything reads them.
+    /// The signals this instance owns, declared before anything reads them.    /// The signals this instance owns, declared before anything reads them.
     fn locals(&mut self, region: &Region, indent: usize) -> String {
         let pad = " ".repeat(indent);
         let mut out = String::new();
@@ -3636,76 +3764,19 @@ impl<'u> Emission<'u> {
         out
     }
 
-    /// The statement that produces a fresh copy of a region's markup.
-    /// The same as [`Emission::clone_template`], except that the root it
-    /// binds against is whatever is already in the container.
+    /// The expression that builds one fresh copy of a region's markup.
     ///
-    /// A build paints the first frame into the document, so on most loads
-    /// the nodes exist before this module runs. `adopt` hands those back
-    /// in the clone's place and every address below walks to the same
-    /// node it would have — the markup came from this same template.
-    ///
-    /// A region with nothing to clone is untouched: there is no markup to
-    /// adopt and `anchors()` builds its two comments as it always did.
-    fn adopt_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        let pad = " ".repeat(indent);
-        let svg = region.is_svg();
-        let index = self.templates.len();
-        self.templates.push((region.html(), svg));
-        if svg {
-            self.used.vector.insert("templateSvg");
-        } else {
-            self.used.dom.insert("template");
-        }
-        // **The paint is the document's, and the tree is the client's.**
-        //
-        // This mounted a fresh clone only when the container was empty,
-        // and bound against whatever was already there otherwise — the
-        // reasoning being that the painted markup came from this same
-        // template, so the container's children are the template's roots
-        // and the walk lands on the same nodes either way.
-        //
-        // That is true of the static markup and false of every region in
-        // it. A region is a pair of anchor comments that a clone leaves
-        // *adjacent*; a prerendered document has the region's rendered
-        // content sitting between them. So `$n.nextSibling`, which the
-        // emitted walk uses for a region's closing anchor, finds the
-        // first served row instead — and the binder then inserts its own
-        // rows before content it never accounted for. Measured on
-        // `examples/writing.zd`: 55 elements served, 52 more built on top,
-        // the list in the document twice.
-        //
-        // Nothing in the walk can tell the two anchors apart, so there is
-        // no repair at this layer. Adopting a served tree needs anchors a
-        // walk can match — the third emission mode #208 describes, whose
-        // hard part is that a Rust serialiser and the browser's parser
-        // must agree on offsets with no compile-time signal when they do
-        // not.
-        //
-        // So the client mounts its own tree, always. What the prerender
-        // buys is undiminished and is the thing it was for: the document
-        // arrives **painted**, so the reader sees the page rather than an
-        // empty shell for however long the module takes to fetch, parse
-        // and run. The replacement that follows is the same tree, built
-        // in the task that loaded the module and therefore before any
-        // paint of its own — so there is nothing to see between the two.
-        // What is lost is the work, not the picture.
-        self.used.dom.insert("mount");
-        format!(
-            "{pad}mount($t{index}(), container);\n\
-             {pad}const {fragment} = container;\n"
-        )
-    }
-
-    fn clone_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        let pad = " ".repeat(indent);
+    /// Allocates the region's `$tN` constant as a side effect, so it is
+    /// called exactly once per region and its result is reused rather than
+    /// asked for twice.
+    fn template_call(&mut self, region: &Region, _indent: usize) -> String {
         if region.roots.is_empty() {
-            return format!("{pad}const {fragment} = document.createDocumentFragment();\n");
+            return "document.createDocumentFragment()".to_string();
         }
         // A region that is nothing but a hole has no markup worth parsing.
         if region.is_only_anchors() {
             self.used.dom.insert("anchors");
-            return format!("{pad}const {fragment} = anchors();\n");
+            return "anchors()".to_string();
         }
         let index = self.templates.len();
         let svg = region.is_svg();
@@ -3715,21 +3786,65 @@ impl<'u> Emission<'u> {
         } else {
             self.used.dom.insert("template");
         }
-        format!("{pad}const {fragment} = $t{index}();\n")
+        format!("$t{index}()")
     }
 
-    /// A region as the body of an arrow function, for an `each` row or a
-    /// `when` arm. The parameters are written out exactly, never with a
-    /// default or a rest, so `Function.prototype.length` is the arity.
+    /// The statement that produces a region's markup: the served nodes if
+    /// this instance is adopting some, and a fresh clone otherwise.
+    ///
+    /// `served` is the name of the closure's trailing parameter, which the
+    /// runtime fills with the nodes the build painted for **this** instance
+    /// — one row of a list, one arm of a `when`, one branch of an `if` —
+    /// or leaves `undefined`. `adopt.js` lifted them out from between the
+    /// anchors before any walk ran, so what arrives here is a fragment
+    /// holding exactly this region's roots and nothing else, which is what
+    /// makes it a drop-in for the clone.
+    fn clone_template(
+        &mut self,
+        region: &Region,
+        fragment: &str,
+        indent: usize,
+        served: Option<&str>,
+    ) -> String {
+        let pad = " ".repeat(indent);
+        let call = self.template_call(region, indent);
+        match served {
+            Some(served) => format!("{pad}const {fragment} = {served} ?? {call};\n"),
+            None => format!("{pad}const {fragment} = {call};\n"),
+        }
+    }
+
+    /// A region as the body of an arrow function, for an `each` row, a
+    /// `when` arm or an `if` branch.
+    ///
+    /// The parameters are written out exactly, never with a default or a
+    /// rest, so the arity is what the source says it is and not what a
+    /// default would hide.
+    ///
+    /// **The trailing parameter is the served nodes** (#208), so a
+    /// closure's `length` is one more than the region's own binders —
+    /// nothing in the runtime reads it, and the comment that used to say
+    /// `whenInto` relied on it was describing a contract that was never
+    /// there. Every one of
+    /// these three closures is called by a runtime binder that knows
+    /// whether the build painted this instance, and passing the nodes is
+    /// what lets the prologue above adopt them without the emitter having
+    /// to know which of the two happened. It is last rather than first so
+    /// that an arm's declared fields keep the positions §14G.1.6 gives
+    /// them.
     fn closure(&mut self, region: &Region, params: &[String], indent: usize) -> String {
-        let fragment = format!("$r{}", self.fragments);
+        let index = self.fragments;
+        let fragment = format!("$r{index}");
+        let served = format!("$s{index}");
         self.fragments += 1;
         let inner = indent + 2;
         let pad = " ".repeat(indent);
         let inner_pad = " ".repeat(inner);
 
-        let mut out = format!("({}) => {{\n", params.join(", "));
-        out.push_str(&self.clone_template(region, &fragment, inner));
+        let mut written: Vec<String> = params.to_vec();
+        written.push(served.clone());
+        let mut out = format!("({}) => {{\n", written.join(", "));
+        out.push_str(&self.clone_template(region, &fragment, inner, Some(&served)));
         out.push_str(&self.locals(region, inner));
         out.push_str(&self.region(region, &fragment, inner));
         out.push_str(&format!("{inner_pad}return {fragment};\n{pad}}}"));
@@ -3752,7 +3867,7 @@ impl<'u> Emission<'u> {
             };
             if matches!(
                 node_at(&region.roots, &bind.target),
-                Some(Tpl::Element { .. }) | Some(Tpl::Comment)
+                Some(Tpl::Element { .. }) | Some(Tpl::Anchor(_))
             ) {
                 sites.push(Site {
                     anchor: target,
@@ -3905,14 +4020,20 @@ impl<'u> Emission<'u> {
             BindKind::Each { list, binder, body } => {
                 self.used.reconcile.insert("eachInto");
                 self.by_position = true;
+                // How many nodes one row is, which is the one thing the
+                // reconciler cannot work out for itself when it is handed a
+                // served list: a row may legally have several roots, so
+                // `rows × roots` nodes have to be cut back into rows by a
+                // count only the compiler has (#208).
+                let roots = body.roots.len();
                 let render = self.closure(body, std::slice::from_ref(binder), indent);
                 format!(
                     "{pad}eachInto({target}, {target}.nextSibling, {list}, $byPosition, \
-                     {render});\n"
+                     {render}, {roots});\n"
                 )
             }
             BindKind::When { scrutinee, arms } => {
-                self.used.dom.insert("whenInto");
+                self.used.branch.insert("whenInto");
                 let mut written = String::new();
                 for arm in arms {
                     let closure = self.closure(&arm.body, &arm.binders, indent + 2);
@@ -3928,7 +4049,7 @@ impl<'u> Emission<'u> {
                 then,
                 otherwise,
             } => {
-                self.used.dom.insert("ifInto");
+                self.used.branch.insert("ifInto");
                 let then = self.closure(then, &[], indent);
                 let otherwise = match otherwise {
                     Some(region) => self.closure(region, &[], indent),

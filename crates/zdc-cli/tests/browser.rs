@@ -1214,7 +1214,7 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
     );
 }
 
-/// **A prerendered page paints, and the client's tree agrees with it** (#138, #208).
+/// **A prerendered page is adopted by the client, not rebuilt** (#138, #208).
 ///
 /// The build runs the program against a shimmed DOM and puts the markup it
 /// painted inside `<div id=app>`, so the first paint is the document rather
@@ -1233,32 +1233,34 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
 /// (#205). So the question is asked of a real browser, of a page a real
 /// build wrote, over a real socket.
 ///
-/// # What is asserted, and what is not
+/// # Why HTML cannot answer it and a property can
 ///
-/// The client **replaces** the served tree rather than adopting it, and
-/// `view.rs` argues why: a region's two anchor comments are adjacent in a
-/// clone and are not in a served document, so the emitted walk cannot find
-/// a region's end. Adoption is #208's third emission mode and does not
-/// exist. What must hold is the weaker claim that still carries the whole
-/// user-visible benefit — the build painted a page, and the tree the client
-/// builds over it is **the same tree**.
+/// A rebuilt tree serialises **identically** to the one it replaced, so
+/// comparing markup before and after cannot tell adoption from
+/// replacement. A JavaScript property can: it survives a node being kept
+/// and cannot survive one being replaced. So the probe stamps `$served` on
+/// every element the *build* wrote — as the parser built it, before the
+/// client has seen the page — and then counts.
 ///
-/// That last part is what no other suite can check. If the Rust serialiser
-/// and the browser's parser disagree, the served markup and the client's
-/// markup differ, and the reader sees the page change after it has already
-/// been shown to them. A JavaScript property stamped on each served element
-/// tells replacement from adoption, so the test also records which of the
-/// two is happening rather than inferring it from HTML that looks the same
-/// either way.
+/// * `kept` is how many served elements are still in the document. Zero
+///   means the client threw the painted tree away.
+/// * `fresh` is how many elements in the finished tree carry no stamp.
+///   Anything above zero is a node the client built over served markup.
+///
+/// A count strictly between the two is the state that must never ship: a
+/// region adopted at one end and rebuilt at the other is a page holding
+/// its own contents twice, which is exactly what the reverted first
+/// attempt did — 55 elements served, 52 built on top, nothing thrown.
 ///
 /// `boot.js` is overwritten rather than the page: the served markup is the
 /// subject, so nothing may touch it, and the generated boot is four lines
 /// whose only job is to call `main` with the container.
 ///
 /// `writing.zd` is the subject because its prerender is not flat — a
-/// heading, a text field, an `each` anchor and a block of parsed markdown
-/// prose inside a row. Those are the shapes where a serialiser and a parser
-/// have somewhere to disagree.
+/// heading, a text field, an `each` of four rows and a block of parsed
+/// markdown prose inside each one. Those are the shapes where a serialiser
+/// and a parser have somewhere to disagree, and the `each` is the one the
+/// first attempt duplicated.
 #[test]
 #[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
 fn a_prerendered_page_is_adopted_by_the_client_rather_than_rebuilt() {
@@ -1350,18 +1352,21 @@ document.body.appendChild(out);
     );
     assert_eq!(
         number("kept"),
-        0,
-        "the served elements are expected to be gone: `main` mounts its own tree over \
-         them. Any survivor means the walk bound to a served node, which is the \
-         half-adopted state that duplicates a region: {verdict}"
+        number("served"),
+        "every element the build painted is expected to still be in the document: \
+         the client binds against the served tree rather than replacing it. A \
+         shortfall means part of the page was rebuilt over markup that was \
+         already right: {verdict}"
     );
     assert_eq!(
         number("fresh"),
-        number("served"),
-        "the client is expected to replace the served tree wholesale — adoption is \
-         #208's third emission mode and does not exist. A count between zero and all \
-         of them means it adopted *some* of the tree and built the rest on top, which \
-         is the state that leaves a page holding its own contents twice: {verdict}"
+        0,
+        "every element in the finished tree is expected to be one the build \
+         wrote. A node with no stamp is one the client built on top of the \
+         served markup, and a count between zero and all of them is the \
+         half-adopted state that leaves a page holding its own contents \
+         twice — 55 served and 52 built over them, measured, before the \
+         anchors could be told apart: {verdict}"
     );
     assert!(
         verdict.contains(r#""same":true"#),
@@ -1369,5 +1374,171 @@ document.body.appendChild(out);
          is shown the first and then, once the module runs, the second — which is the \
          disagreement between a Rust serialiser and the browser's parser that no \
          compile-time signal catches: {verdict}"
+    );
+}
+
+/// The program whose build and client cannot agree.
+///
+/// `remembered` is the everyday way a starting value differs between the
+/// two: the build host has no `localStorage`, so it paints the declared
+/// starting value, and a returning reader's browser has whatever they left
+/// there. Nothing in the language marks the difference and nothing can —
+/// which is exactly why the served document has to say which branch it
+/// holds rather than leave the client to assume its own answer was the
+/// build's.
+const DISAGREEING_PROGRAM: &str = "state expanded is remembered Truth starting no\n\
+                                   \n\
+                                   view\n\
+                                   \x20   Column\n\
+                                   \x20       Text \"always here\"\n\
+                                   \x20       if expanded\n\
+                                   \x20           Row\n\
+                                   \x20               Text \"the open branch\"\n\
+                                   \x20               Text \"second node\"\n\
+                                   \x20       otherwise\n\
+                                   \x20           Text \"the closed branch\"\n";
+
+/// **A region the build and the client disagree about is rebuilt, not
+/// doubled** (#208).
+///
+/// This is the failure with no compile-time signal, and the one the
+/// reverted first attempt at adoption shipped: a binder that inserts its
+/// own content beside content it never accounted for leaves the page
+/// holding its contents twice, renders, and throws nothing.
+///
+/// The disagreement is manufactured rather than waited for. The build has
+/// no `localStorage`, so it paints `expanded` as the `no` the program
+/// declares; the first load writes `true` into the store and navigates to
+/// the program's own document, so the second load is a browser whose
+/// starting value is not the one the document was painted with. One
+/// session and one origin, for the reason
+/// `a_remembered_value_survives_a_reload_in_a_real_browser` gives.
+///
+/// What must hold is three things at once, and the middle one is the
+/// point:
+///
+///  * the shell around the conditional is **adopted** — the disagreement
+///    is local to the region, not a reason to throw the page away;
+///  * the served branch is **gone**, not sitting beside the built one; and
+///  * nothing threw, because a walk was never bound to markup written for
+///    the other branch.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_branch_the_build_and_the_client_disagree_about_is_rebuilt_rather_than_doubled() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let project = TempDir::new("browser-disagree-src");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    let source = project.path.join("disagree.zd");
+    std::fs::write(&source, DISAGREEING_PROGRAM).expect("the probe program");
+
+    let out = TempDir::new("browser-disagree");
+    let built = build(&source, &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the probe must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // The build painted the branch the program declares, and said so in the
+    // anchor. Checked here so that "the client rebuilt" and "there was
+    // nothing to rebuild" stay two failures with two messages.
+    let served = std::fs::read_to_string(out.path.join("index.html")).expect("the built page");
+    assert!(
+        served.contains("the closed branch"),
+        "the build did not paint the `otherwise` branch, so there is no \
+         disagreement to manufacture:\n{served}"
+    );
+
+    std::fs::write(
+        out.path.join("set.js"),
+        "localStorage.setItem('zd:expanded', JSON.stringify(true));\nlocation.replace('./');\n",
+    )
+    .expect("the store writer");
+    std::fs::write(
+        out.path.join("set.html"),
+        "<!doctype html><meta charset=\"utf-8\">\
+         <script type=\"module\" src=\"./set.js\"></script>\n",
+    )
+    .expect("the first load");
+
+    std::fs::write(
+        out.path.join("boot.js"),
+        r#"import { main } from './client.js';
+const app = document.getElementById('app');
+const served = [...app.querySelectorAll('*')];
+served.forEach((el, i) => { el.$served = i + 1; });
+let threw = null;
+try { main(app); } catch (e) { threw = String(e); }
+const verdict = {
+  served: served.length,
+  kept: served.filter((el) => el.isConnected).length,
+  text: app.textContent,
+  threw,
+};
+const out = document.createElement('pre');
+out.id = 'verdict';
+out.textContent = JSON.stringify(verdict);
+document.body.appendChild(out);
+"#,
+    )
+    .expect("the probe boot");
+
+    let profile = TempDir::new("browser-disagree-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(
+        &browser,
+        &format!("http://{address}/set.html"),
+        &profile.path,
+    );
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    let verdict = dom
+        .split(r#"<pre id="verdict">"#)
+        .nth(1)
+        .and_then(|rest| rest.split("</pre>").next())
+        .unwrap_or_else(|| {
+            panic!("the probe never reported — the module threw before it finished:\n{dom}")
+        })
+        .to_string();
+
+    assert!(
+        verdict.contains(r#""threw":null"#),
+        "adopting the wrong branch binds a walk to markup written for the other \
+         one, and this is what that looks like: {verdict}"
+    );
+    // The client's answer, so the disagreement really happened.
+    assert!(
+        verdict.contains("the open branch"),
+        "the store did not reach the client, so the build and the client agreed \
+         and this test proved nothing: {verdict}"
+    );
+    // The build's answer, gone rather than beside it. This is the assertion
+    // the reverted attempt would have failed.
+    assert!(
+        !verdict.contains("the closed branch"),
+        "the branch the build painted is still in the page next to the branch the \
+         client rendered. That is the state adoption must never reach — the page \
+         holds its own contents twice, renders, and throws nothing: {verdict}"
+    );
+    // And the disagreement stayed local: the shell outside the conditional
+    // was adopted, not thrown away with the region.
+    assert!(
+        verdict.contains(r#""kept":2"#),
+        "the two elements outside the conditional — the column and the text above \
+         it — are the same nodes the build wrote, whatever happened inside the \
+         region. A lower count means one region disagreeing cost the whole \
+         page: {verdict}"
     );
 }

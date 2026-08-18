@@ -72,6 +72,28 @@ pub const FOREIGN_JS: &str = include_str!("../runtime/foreign.js");
 /// HTML. Its own module so a program with no `Prose` does not ship it.
 pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 
+/// Variant dispatch and conditional rendering: `when`, `whenInto`, `ifInto`.
+///
+/// Its own module for the reason `foreign.js`, `markup.js` and `list.js`
+/// are, and here the reason has a number attached: `dom.js` is in every
+/// bundle including the null program the size gate is measured on, so
+/// anything in it is paid for by every program forever. `hello.zd`,
+/// `counter.zd` and the null program each write neither a `when` nor an
+/// `if`, and none of them should download the dispatcher for one. It
+/// imports `signal.js` and two functions from `dom.js`, both of which a
+/// program with a `when` has already linked.
+pub const BRANCH_JS: &str = include_str!("../runtime/branch.js");
+
+/// Taking over a document the build already painted — §16.10's third
+/// emission mode (#208).
+///
+/// Its own module for the reason `branch.js` is, and the line is drawn
+/// sharper: a view with no holes in it has nothing to lift out of a served
+/// tree, so it adopts in two lines of emitted code and links none of this.
+/// It imports nothing — it moves nodes and touches no signal — so it is
+/// exactly one file more for the programs that need it.
+pub const ADOPT_JS: &str = include_str!("../runtime/adopt.js");
+
 /// Keyed list reconciliation: `each`, `eachInto` and the interim key
 /// function.
 ///
@@ -269,6 +291,8 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/dom.js", DOM_JS),
     ("runtime/foreign.js", FOREIGN_JS),
     ("runtime/markup.js", MARKUP_JS),
+    ("runtime/branch.js", BRANCH_JS),
+    ("runtime/adopt.js", ADOPT_JS),
     ("runtime/keys.js", KEYS_JS),
     ("runtime/wire.js", WIRE_JS),
     // `list.js` was missing from this list, which is the exact failure the
@@ -703,6 +727,55 @@ mod tests {
                  would fail to resolve"
             );
         }
+    }
+
+    /// No two modules declare the same top-level `const`.
+    ///
+    /// **This is a real failure with no signal of its own.** The prerender
+    /// pass has no module loader — the engine's wants a filesystem resolver
+    /// — so it strips every `import` and `export` and evaluates every
+    /// module a program links into **one scope**. Two files declaring
+    /// `const OPEN` is then a `SyntaxError` at load, and because the
+    /// prerender is best-effort by design that error is swallowed: the
+    /// build succeeds, the page ships with an empty container, and the only
+    /// visible consequence is that the first paint quietly stopped
+    /// happening. It cost `adopt.js` and `branch.js` exactly that, once.
+    ///
+    /// Function declarations are deliberately not checked: they redeclare
+    /// legally in a script, and three modules already define their own
+    /// `read` helper on purpose.
+    #[test]
+    fn no_two_modules_declare_the_same_top_level_const() {
+        let mut seen: std::collections::BTreeMap<String, &str> = std::collections::BTreeMap::new();
+        for (name, source) in MODULES {
+            for line in source.lines() {
+                let Some(rest) = line.strip_prefix("const ") else {
+                    continue;
+                };
+                let Some(binding) = rest.split([' ', '=']).next() else {
+                    continue;
+                };
+                if binding.is_empty() {
+                    continue;
+                }
+                if let Some(other) = seen.insert(binding.to_string(), name) {
+                    assert_eq!(
+                        other, *name,
+                        "`{name}` and `{other}` both declare a top-level `const {binding}`. \
+                         A program linking both flattens them into one scope in the \
+                         prerender pass, where the second declaration is a `SyntaxError` \
+                         that silently turns the first paint off."
+                    );
+                }
+            }
+        }
+        assert!(
+            seen.len() > 4,
+            "only {} top-level constants found across {} modules, so this stopped \
+             reading them",
+            seen.len(),
+            MODULES.len()
+        );
     }
 
     /// Every marker in every module is matched, and none is nested.

@@ -174,6 +174,10 @@ fn renderer_suite(mode: zdc_runtime::Mode) {
                 "list.js",
                 flatten(&zdc_runtime::for_mode(zdc_runtime::LIST_JS, mode)),
             ),
+            (
+                "branch.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::BRANCH_JS, mode)),
+            ),
         ],
         38,
         mode,
