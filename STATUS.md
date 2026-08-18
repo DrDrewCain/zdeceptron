@@ -215,7 +215,7 @@ the total had grown from about 1,546 to 2,661. It is 2,665 now.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 948 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-codegen` | 947 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
 | `zdc-graph` | 228 | Including the information-flow negative suite and the failure channel. |
@@ -224,15 +224,7 @@ the total had grown from about 1,546 to 2,661. It is 2,665 now.
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
 | `zdc-cli` | 150 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. `tests/editor_configs.rs` holds every configuration in `editors/` to the subcommand it launches, which is the one kind of breakage an editor reports as an absence rather than an error. |
 =======
-| `zdc-codegen` | 948 | The largest suite. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
-| `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 220 | Split across boundary-focused files. |
-| `zdc-graph` | 228 | Including the information-flow negative suite and the failure channel. |
-| `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
-| `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 150 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
->>>>>>> be8773e (Decode a polled live-sync event, as the stream already does)
+>>>>>>> a8be046 (Keep one row per crate, and both decisions)
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
