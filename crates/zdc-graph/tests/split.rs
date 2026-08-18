@@ -1021,6 +1021,14 @@ fn endpoints(hir: &zdc_hir::Hir, split: &zdc_graph::TierSplit) -> Vec<(String, V
 /// `(DefId, RootId)` to carry the placement vector of the arguments
 /// (issue #21).
 ///
+/// The widening is not needed, for a reason this test does not reach and
+/// `one_component_at_two_placements_classifies_each_write_separately`
+/// below does: a component parameter is *substituted away* by
+/// `zdc-resolve::instantiate` before this pass runs, so the argument's
+/// placement is carried in by the expression itself and no component ever
+/// reaches the key. This test covers the other half — that a `with`
+/// binding, which instantiation does not remove, still adds no crossing.
+///
 /// It does not stop being true here. A binding names a value; it declares
 /// no placement, and `zdc-graph::sites` walks the bound expression in
 /// exactly the position it would have occupied written out. So the
@@ -1171,6 +1179,107 @@ fn two_instances_of_one_component_keep_their_writes_apart() {
         split.mutations_at.len(),
         "the sound map and the place-keyed map disagree about how many \
          writes exist, which is exactly the aliasing this guards"
+    );
+}
+
+/// **Issue #21's premise, tested and not reproduced.**
+///
+/// §17.7 says the instantiation key must widen from `(DefId, RootId)` to
+/// carry "the placement vector of the arguments", because a component
+/// parameter can carry a signal whose placement differs per call site and
+/// the crossing at a read inside the component then depends on the
+/// argument. The worked consequence is this program: one component, a
+/// `client` argument at one call site and a `durable` one at the other.
+///
+/// There is no key to widen. `zdc-resolve::instantiate` replaces a
+/// parameter reference with the caller's own expression *before* this pass
+/// runs, so a component contributes no `(DefId, RootId)` pair at all and
+/// the two `add 1 to n`s arrive here as two writes with two different
+/// bases. The split then classifies each in the region its own argument
+/// put it in, using the key it already has. Substitution is exact
+/// monomorphisation: it separates call sites by the whole argument
+/// expression, which is strictly finer than separating them by placement,
+/// and it is why the instantiation count is bounded by the source's call
+/// sites rather than by the cardinality of the placement vector.
+///
+/// The sibling above pins two instances writing the *same* signal. This
+/// pins two instances writing signals of *different placement*, which is
+/// the case §17.7 named.
+#[test]
+fn one_component_at_two_placements_classifies_each_write_separately() {
+    let (hir, split) = compile(
+        "state clicks is client  Whole starting 0\n\
+         state hits   is durable Whole starting 0\n\
+         \n\
+         component Bump with n\n\
+         \x20   Button \"up\"\n\
+         \x20       on click\n\
+         \x20           add 1 to n\n\
+         \n\
+         view\n\
+         \x20   Column\n\
+         \x20       Bump clicks\n\
+         \x20       Bump hits\n",
+    );
+
+    // The program is accepted. Issue #21 says the second call site is
+    // either refused or collides with the first; it is neither.
+    assert!(
+        !split.has_errors(),
+        "one component at two placements must compile: {:?}",
+        codes(&split.diagnostics)
+    );
+
+    // Two writes, from one written statement.
+    assert_eq!(
+        split.mutations.len(),
+        2,
+        "one entry per instantiated write: {:?}",
+        split.mutations
+    );
+
+    // And they were classified *differently*. This is the assertion the
+    // issue is about: the `client` argument's write stays in the browser,
+    // the `durable` one becomes a command. A key too narrow to tell the
+    // call sites apart would have given both the same verdict.
+    let mut verdicts: Vec<String> = split
+        .mutations
+        .values()
+        .map(|crossing| format!("{crossing:?}"))
+        .collect();
+    verdicts.sort();
+    assert_eq!(verdicts.len(), 2);
+    assert!(
+        verdicts[0].starts_with("Command"),
+        "the durable argument's write must become a command: {verdicts:?}"
+    );
+    assert_eq!(
+        verdicts[1], "Local",
+        "the client argument's write must stay local: {verdicts:?}"
+    );
+
+    // The claim that there is no key to widen, asserted directly: the
+    // component contributes no `(DefId, RootId)` pair, because
+    // substitution removed it before this pass ran. `Bump` is a
+    // `DefKind::Component` in the HIR and absent from the key set.
+    let keyed: std::collections::BTreeSet<zdc_hir::DefId> =
+        split.reached_by.keys().map(|(def, _)| *def).collect();
+    assert!(!keyed.is_empty(), "the fixpoint reached nothing at all");
+    for def in &keyed {
+        assert!(
+            !matches!(hir.defs[*def].kind, DefKind::Component(_)),
+            "`{}` is a component and appeared in the instantiation key; \
+             substitution should have removed it before this pass ran",
+            hir.defs[*def].name
+        );
+    }
+    // Non-vacuity: `Bump` really is a component of this program, so the
+    // loop above ranged over a key set that could have contained it.
+    let bump = def_named(&hir, "Bump");
+    assert!(matches!(hir.defs[bump].kind, DefKind::Component(_)));
+    assert!(
+        !keyed.contains(&bump),
+        "the component was keyed after all: {keyed:?}"
     );
 }
 
