@@ -70,6 +70,47 @@
 // `toJSON`, which is the whole reason this file exists, so nothing about
 // how a map rides has changed.
 
+/**
+ * Which version of this format the bytes are written in.
+ *
+ * **No compatibility is promised between versions; a mismatch is refused
+ * by name** (#144). The rule and its full argument are in
+ * `docs/reference.md` §14; what belongs here is why this file is not the
+ * place the version travels.
+ *
+ * The short form of the argument, because it is about `decode` above: a
+ * malformed `$map` throws, since this version knows what one looks like;
+ * a marker from a later version cannot throw, since refusing it would
+ * need the knowledge the older end is missing. It decodes as a record and
+ * reaches the program as `Ready` holding a value nobody wrote —
+ * `wire_contract.rs` pins that rather than describing it.
+ *
+ * This is the *format's* version and not the compiler's. It moves when
+ * the bytes move: a new marker, a retired one, a different shape for one
+ * of §5.4's four types. Most releases do not touch it, which is what
+ * makes refusing affordable rather than a broken redeploy every time.
+ *
+ * # Why it is not an envelope
+ *
+ * `{"z":1,"v":…}` is the obvious mechanism and it is wrong here, because
+ * `stringify` and `parse` are also the *persistence* format —
+ * `zdc-host`'s `$wireStringify` writes durable keys with them. Wrapping
+ * the value would version every stored value and rewrite every store on
+ * upgrade, which is #37's migration question and not this one.
+ *
+ * So the number rides beside the bytes: a header on the request and the
+ * response, and a query parameter on the live-sync subscription, where
+ * `EventSource` cannot set a header. `encode` and `decode` are untouched
+ * and a stored value is the same bytes it always was.
+ */
+export const VERSION = 1;
+
+/** The header both ends name the format in. */
+export const VERSION_HEADER = 'zd-wire';
+
+/** The subscription parameter, for the transport that has no headers. */
+export const VERSION_PARAM = 'wire';
+
 /** A ZD value as JSON-representable data. */
 export function encode(value) {
   if (value !== null && typeof value === 'object' && typeof value.toJSON === 'function') {

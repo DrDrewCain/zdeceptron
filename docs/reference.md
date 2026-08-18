@@ -25,7 +25,8 @@ out in full, with a rejected and an accepted example each.
 11. [Information flow](#11-information-flow)
 12. [Build capabilities](#12-build-capabilities)
 13. [Diagnostics](#13-diagnostics)
-14. [Not implemented](#14-not-implemented)
+14. [The wire format](#14-the-wire-format)
+15. [Not implemented](#15-not-implemented)
 
 ---
 
@@ -616,7 +617,7 @@ Two consequences worth knowing before you write one:
 `limit N per visitor` bounds evaluations per declaration per anonymous
 session. It is not a cumulative disclosure bound and the compiler's own
 warning text is forbidden from implying that it is. A release with no `limit`
-warns (`W-REL-01`). See [§14](#14-not-implemented) for what `release` does
+warns (`W-REL-01`). See [§15](#15-not-implemented) for what `release` does
 not yet do.
 
 ### `request` — an outbound HTTP request
@@ -732,7 +733,7 @@ The entry's key is `zd:` and the signal's name. There is no way to compute
 one: a key a program could choose is a key it could choose from a value, and
 that is a way to read a cell the program never declared.
 
-`sessionStorage` has no placement — see [§14](#14-not-implemented).
+`sessionStorage` has no placement — see [§15](#15-not-implemented).
 
 A `static` signal is computed by the build and inlined into the bundle;
 writing to one is `E0310`. A `server` signal is *recomputed from its inputs*
@@ -1669,7 +1670,7 @@ unendorsed argument the compiler cannot trace to a grant), `E-REL-10` (a
 release body reached a foreign declaring neither `pure` nor `trusted`), and
 `W-REL-01` (a release with no `limit`).
 
-What it does **not** yet do is in [§14](#14-not-implemented).
+What it does **not** yet do is in [§15](#15-not-implemented).
 
 ---
 
@@ -1815,7 +1816,123 @@ at the first error rather than recovering (issue #151).
 
 ---
 
-## 14. Not implemented
+## 14. The wire format
+
+A value that crosses between the browser and a server function travels as
+JSON with one addition: a `Map of K to V` rides as `{"$map": [[key, value],
+…]}`, because `JSON.stringify` turns a `Map` into `{}` and says nothing.
+`Whole`, `Decimal`, `Text` and `Truth` are their JSON counterparts, a `List
+of T` is an array, a `record` is an object keyed by field name, and a
+`choice` is `{tag, fields}`. `$` cannot begin a ZD identifier, so no record
+field can ever be spelled `$map`.
+
+### The compatibility rule
+
+**No compatibility is promised between wire format versions. A mismatch is
+refused, and the refusal names both versions.**
+
+Not "new servers accept old clients", not "old clients accept new servers":
+an end that speaks version N reads bytes written by version N and refuses
+everything else.
+
+This is not a hypothetical. During any rolling deploy the client is a page
+already loaded in a browser and the server has just been replaced underneath
+it, so for the length of the deploy — and for as long afterwards as somebody
+leaves a tab open — the two ends are built by different compilers. That is
+normal operation, not an edge case.
+
+The reason the answer is "refuse" rather than "cope" is an asymmetry in what
+a decoder can notice. A *malformed* `$map` fails loudly, because this version
+knows what a `$map` should look like:
+
+```text
+{"$map": "pairs"}   →   A map on the wire is an array of [key, value] pairs.
+```
+
+A marker from a *later* version cannot fail at all. It is a well-formed
+object with an unfamiliar field name, so it decodes as an ordinary record,
+re-encodes as itself, and reaches the program as `Ready` holding a value
+nobody wrote:
+
+```text
+{"$set": [1, 2]}    →   a record with one field named $set
+```
+
+Refusing that would require knowing `$set` was ever meant to be a marker,
+which is exactly the knowledge the older end does not have. So the choice is
+not between refusing and coping. It is between refusing, and silently
+inventing values whenever the two ends disagree.
+
+### The version is the format's, not the compiler's
+
+The number changes when the bytes change — a new marker, a retired one, a
+different shape for one of the types above. It does not change when the
+compiler's version does. `zdc 0.1.0` and `0.1.1` write identical bytes, and
+a rule that refused across them would break every redeploy and buy nothing.
+Most releases will not move it, which is what makes refusing affordable.
+
+### Where the version rides
+
+Beside the bytes, not inside them:
+
+| transport | how |
+|---|---|
+| a call to a server function | a `zd-wire` header, on the request and on the response |
+| the live-sync stream and poll | a `wire=` query parameter |
+
+It is not an envelope around the value, because `stringify` and `parse` are
+also the **persistence** format — a `durable` key is written to the store
+with the same two functions. Wrapping the value would version every stored
+value and rewrite every store on upgrade, which is a different question
+(#37's migration story) and not this one's to answer.
+
+The stream carries it in the query rather than a header because `EventSource`
+cannot set one. The poll spells it identically, so the two remain one
+protocol at two stream lengths.
+
+The cost is twelve bytes on a request, twelve on the response, and seven once
+per subscription — never per event.
+
+### What a program sees
+
+`Failed`, with `code` of `Rejected` and a `message` naming both versions:
+
+```text
+greeting was called in wire format 2 and this server reads 1.
+The page was built by a different compiler; reload it.
+```
+
+`Rejected` and not a fourth `Code`. [`Code`](#4-types) is closed at three,
+and each of the three is decided by the client's own control flow rather than
+by anything a server sends — that is what lets a program match on it without
+the answer being steerable by whoever it is talking to. A version a server
+picks by writing a header is a value the server chooses, so a code of its own
+would put a fourth arm under a server's control. The detail goes in
+`message` instead, which is host text and carries the label to match.
+
+A request naming **no** version is the same refusal. An end that does not
+name the format was built before the format had one, which makes it a
+different format; treating silence as agreement would leave the rule open in
+the one case guaranteed to occur, which is a rollback to a build from before
+the version existed.
+
+The one exception is deliberate: `zdc dev`'s own reload channel carries no ZD
+value, so it neither names a version nor is refused for lacking one.
+
+### What is *not* versioned by this
+
+The live-sync **event protocol** — the event names, the sequence numbers,
+`resync` — is separately and deliberately forward-compatible: a client
+ignores an event it does not recognise rather than failing, so a stale page
+across a deploy learns nothing new instead of breaking. That is safe for an
+event name and unsafe for a value, and the difference is the whole of the
+rule above: you can ignore an event you do not understand, because you know
+you did not understand it. You cannot ignore a value you have misread,
+because you do not know you misread it.
+
+---
+
+## 15. Not implemented
 
 Most of these parse. That is a deliberate choice — the grammar is settled
 ahead of the semantics — and it means the compiler can tell you precisely

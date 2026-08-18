@@ -6,7 +6,7 @@
 // honest while they are in flight.
 
 import { signal, effect } from './signal.js';
-import { stringify, decode } from './wire.js';
+import { stringify, decode, VERSION, VERSION_HEADER } from './wire.js';
 
 const LOADING = { tag: 'Loading', fields: [] };
 
@@ -333,7 +333,11 @@ async function defaultTransport(name, args) {
   try {
     response = await fetch(endpointUrl(name), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        // Which format the body is written in (#144). Twelve bytes.
+        [VERSION_HEADER]: String(VERSION),
+      },
       // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
       // JavaScript `Map`, and `JSON.stringify` turns one into `{}` without
       // saying so. See `wire.js`.
@@ -357,6 +361,18 @@ async function defaultTransport(name, args) {
     // the status line, which is not part of the body.
     throw new TransportFailure(CODES.REJECTED, await reason(response, name));
   }
+  // Not redundant with the server's check, which cannot cover this
+  // direction: a rollback to a build predating #144 neither inspects the
+  // request header nor sets this one, so a 200 arrives carrying bytes in
+  // a format nobody agreed to. A missing header is that case exactly.
+  const spoken = headerOf(response, VERSION_HEADER);
+  if (spoken !== String(VERSION)) {
+    throw new TransportFailure(
+      CODES.REJECTED,
+      `${name} answered in wire format ${spoken === null ? 'none' : spoken} and this page ` +
+        `reads ${VERSION}. The server was built by a different compiler; reload to get its page.`
+    );
+  }
   try {
     return decode(await response.json());
   } catch (error) {
@@ -367,6 +383,21 @@ async function defaultTransport(name, args) {
     // keeps the body out of `code`.
     throw new TransportFailure(CODES.REJECTED, `${name} answered with something unreadable: ${error}`);
   }
+}
+
+/**
+ * One response header, or `null`.
+ *
+ * Defensive because `setTransport` exists: a host page or a test may hand
+ * back a plain object, and a `TypeError` reading `.headers.get` of one
+ * would be reported as `Unreachable` — the runtime blaming the network
+ * for its own assumption. No headers is read as no version, which is the
+ * same mismatch and is at least true.
+ */
+function headerOf(response, name) {
+  const headers = response && response.headers;
+  if (!headers || typeof headers.get !== 'function') return null;
+  return headers.get(name);
 }
 
 async function reason(response, name) {

@@ -144,6 +144,53 @@ fn record_fields_named_like_object_internals_survive_decode() {
     assert_eq!(sandbox.text(expression).unwrap(), "true");
 }
 
+/// **A marker this version does not know decodes as a record, in silence.**
+///
+/// This is the measurement #144 has to be decided from, so it is recorded
+/// rather than described. `decode` is strict about `$map` — the two tests
+/// above are that strictness — and it is strict about nothing else,
+/// because there is nothing else to be strict about *yet*. The moment a
+/// later version of this format spells one more marker, every decoder
+/// written before it reads that marker's payload as an ordinary record
+/// with one oddly-named field. No throw, no warning: a `Ready` variant
+/// holding a value nobody encoded.
+///
+/// That asymmetry is the whole argument for the rule in `docs/reference.md`
+/// §14. A malformed `$map` fails loudly because this version knows what
+/// `$map` should look like. An unknown `$set` cannot fail at all, because
+/// failing would require knowing that `$set` was ever meant to be a
+/// marker — which is precisely the knowledge the older end does not have.
+/// No amount of care inside `decode` can close that, so it is closed
+/// outside it, at the transport, by refusing to decode bytes that a
+/// different version of this format wrote.
+#[test]
+fn a_marker_from_a_later_version_is_read_as_a_record_and_nothing_says_so() {
+    let mut sandbox = wire();
+    // Values shaped exactly as a future marker would be. Each one is
+    // accepted, and each one comes back as a record.
+    for payload in ["{$set: [1, 2]}", "{$date: 0}", "{$map2: [[1, 2]]}"] {
+        let expression = format!(
+            "(() => {{ const v = decode({payload}); \
+             return (v instanceof Map) + '|' + JSON.stringify(v); }})()"
+        );
+        let read = sandbox.text(&expression).unwrap_or_else(|error| {
+            panic!("decode({payload}) refused, which would already be the rule: {error:?}")
+        });
+        assert!(
+            read.starts_with("false|"),
+            "decode({payload}) produced {read}; the recorded behaviour is a plain record"
+        );
+    }
+
+    // And the payload survives intact, which is what makes it silent: the
+    // value is not merely wrong, it is well-formed and re-encodes as
+    // itself, so no later check downstream can notice either.
+    assert_eq!(
+        sandbox.text("stringify(decode({$set: [1, 2]}))").unwrap(),
+        r#"{"$set":[1,2]}"#
+    );
+}
+
 #[test]
 fn repeated_round_trips_preserve_the_same_wire_text() {
     let mut sandbox = wire();

@@ -167,6 +167,24 @@ pub const RPC_JS: &str = include_str!("../runtime/rpc.js");
 /// second copy of the rules is how they come to disagree.
 pub const WIRE_JS: &str = include_str!("../runtime/wire.js");
 
+/// The wire format's own version. See `runtime/wire.js` for the rule.
+///
+/// **Restated here rather than parsed, and pinned by a test.** The Rust
+/// halves that need it — `zdc-dev`, which refuses a mismatched request
+/// before the engine is ever started — run outside any JavaScript, so
+/// they cannot read the constant from the module that defines it. A
+/// second spelling is therefore unavoidable; what is avoidable is the two
+/// drifting, and `wire_version.rs` is what stops that by reading the
+/// number back out of `wire.js` and out of `zdc-deploy`'s router.
+pub const WIRE_VERSION: u32 = 1;
+
+/// The header both ends name the format in. Mirrors `VERSION_HEADER`.
+pub const WIRE_VERSION_HEADER: &str = "zd-wire";
+
+/// The subscription parameter, for the transport with no headers.
+/// Mirrors `VERSION_PARAM`.
+pub const WIRE_VERSION_PARAM: &str = "wire";
+
 /// Live sync for `durable` placement, and the transport seam it needs.
 ///
 /// Shipped only when the split found a durable key. It imports `rpc.js`,
