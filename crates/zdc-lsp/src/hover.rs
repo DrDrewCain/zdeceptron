@@ -386,6 +386,15 @@ fn element_note(name: &str) -> String {
             "\n\nIts first argument is a two-way binding to a `Truth` signal, which must be \
              `client`-placed (spec §14B.5)."
         }
+        "Dialog" => {
+            "\n\nA modal. Its first argument is a two-way binding to a `Truth` signal saying \
+             whether it is showing, which must be `client`-placed (spec §14B.5): writing it \
+             opens and closes the dialog, and the dialog writes it back when the browser \
+             closes it. `label is …` is required, because a modal moves focus into itself and \
+             an unnamed one is announced as just \"dialog\".\n\nFocus moves in when it opens, \
+             is trapped while it is open, and returns to whatever opened it when it closes. \
+             All three are the browser's, through `showModal()`."
+        }
         _ => "",
     };
     format!("```zdeceptron\n{name}\n```\n\nA view element the language provides.{extra}")

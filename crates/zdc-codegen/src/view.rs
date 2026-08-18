@@ -98,6 +98,19 @@ enum BindKind {
     /// carries the helper and the argument for it, including why it is
     /// in a program's own preamble rather than in the shipped runtime.
     NumberField(String),
+    /// `$modal(node, getter, setter)` — the whole of `Dialog`'s binding.
+    ///
+    /// One bind rather than a [`BindKind::Attribute`] plus a
+    /// [`BindKind::Listener`], because the two halves are not independent:
+    /// the effect must not call `showModal()` on a dialog the browser has
+    /// already opened, and the `close` listener must not fight the effect
+    /// that caused the close. Emitting them separately would put the rule
+    /// that ties them together nowhere. `elements.rs`'s `Slot::Open` and
+    /// the helper in `intrinsics.rs` state it.
+    Modal {
+        getter: String,
+        setter: String,
+    },
     Style {
         property: String,
         getter: String,
@@ -1564,6 +1577,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 format!("`{}` needs the state it binds to.", element.name),
                 element.span,
             ),
+            (Slot::Open, Some(expr)) => self.modal(element, expr, target),
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::Open, None) => self.emitter.error(
+                format!(
+                    "`{}` needs the state that says whether it is showing, written first. \
+                     Nothing else opens or closes it.",
+                    element.name
+                ),
+                element.span,
+            ),
             // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
@@ -2760,6 +2783,25 @@ impl<'a, 'h> Lowering<'a, 'h> {
         );
     }
 
+    /// `Dialog confirming`: the signal that says whether the modal is
+    /// showing, in both directions.
+    ///
+    /// It shares `bound_signal` with every other two-way element, so
+    /// §14B.5's rule about which signals an interaction may write is the
+    /// same rule — a `durable` signal here would make dismissing a dialog
+    /// a network write, which is what that rule exists to refuse. What
+    /// differs from `two_way` is that neither half is an attribute: the
+    /// read is `showModal()`/`close()` and the write is a `close` event,
+    /// and both are inside `$modal` because they have to agree about what
+    /// the DOM is currently doing. `Slot::Open` argues it.
+    fn modal(&mut self, element: &HirElement, expr: ExprId, target: &Address) {
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
+            return;
+        };
+        self.emitter.use_helper("$modal");
+        self.bind(target.clone(), BindKind::Modal { getter, setter });
+    }
+
     /// The `[read, write]` pair of the signal a two-way slot binds, with
     /// §14B.5's rules already applied.
     ///
@@ -3736,6 +3778,15 @@ impl<'u> Emission<'u> {
             BindKind::NumberField(getter) => {
                 self.used.signal.insert("effect");
                 format!("{pad}$numberField({target}, {getter});\n")
+            }
+            // Two runtime symbols rather than one: the helper opens and
+            // closes inside an `effect` and listens for `close` through
+            // `on`, so a bundle that imported only the first would throw
+            // on the listener it never linked.
+            BindKind::Modal { getter, setter } => {
+                self.used.signal.insert("effect");
+                self.used.dom.insert("on");
+                format!("{pad}$modal({target}, {getter}, {setter});\n")
             }
             BindKind::StyleOnce { property, value } => {
                 // Through `js::string`, as its three neighbours are. The

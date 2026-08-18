@@ -1705,3 +1705,200 @@ fn a_disabled_style_reaches_a_control_disabled_the_only_way_this_language_can_be
         "and the control must be the thing that rule selects"
     );
 }
+
+// --- Dialog (#53) ---------------------------------------------------------
+//
+// The open/closed state, the write-back and the deferred opening are
+// driven here. The focus trap, Escape and the return of focus to whatever
+// opened the dialog are deliberately not: they are `showModal()`'s own
+// behaviour and the shim has no focus, no top layer and no `inert` to ask
+// about, so `zdc-cli/tests/browser.rs` asks a real browser instead.
+//
+// What the shim does model is the state machine, and it models it by
+// throwing where a browser throws — `showModal()` refuses an already-open
+// dialog and refuses a detached node — so a binding that got either wrong
+// fails here rather than quietly doing nothing.
+//
+// The verdicts are read off `dialog.open` rather than out of the
+// serialised tree, because what the binding must get right is the
+// element's *state*: a dialog holding an `open` attribute it was given
+// rather than one `showModal()` wrote is the exact mistake this element
+// exists to make unwritable, and the two look identical in a string.
+
+/// A modal is opened and closed by the signal it binds, and by nothing
+/// else (#53).
+///
+/// The shim's `showModal` throws on a node that is not in the document and
+/// on one that is already open, exactly as a browser does, so a binding
+/// that called the method twice — or that reached for the attribute
+/// instead — fails here rather than rendering something that looks right.
+#[test]
+fn a_dialog_opens_and_closes_from_the_signal_that_binds_it() {
+    let bundle = compile_source(
+        "state confirming is client Truth starting no\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"Delete\"\n\
+         \x20           on click\n\
+         \x20               set confirming to yes\n\
+         \x20       Dialog confirming, label is \"Confirm deletion\"\n\
+         \x20           Text \"Delete it?\"\n",
+    );
+    // The template carries no `open`. A dialog whose markup said `open`
+    // is one `showModal()` refuses to open — and until it threw it would
+    // have been showing with no backdrop, no focus trap and no Escape.
+    assert!(
+        bundle
+            .client_js
+            .contains("<dialog aria-label=\"Confirm deletion\">"),
+        "the template must be a plain closed dialog:\n{}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let verdict = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $dialog = findTag($host, 'dialog');\n\
+         const $shut = $dialog.open;\n\
+         findTag($host, 'button').fire('click');\n\
+         'shut=' + $shut + ' shown=' + $dialog.open + \
+         ' name=' + $dialog.attributes['aria-label'] + \
+         ' holds=' + serialize($host).includes('Delete it?')",
+    );
+    assert_eq!(
+        verdict, "shut=false shown=true name=Confirm deletion holds=true",
+        "a dialog must start closed, open when its signal is written, carry the name it was \
+         given, and hold its children"
+    );
+}
+
+/// **Closing writes back, so the button that opened the modal still
+/// works.**
+///
+/// This is the failure the element exists to make unwritable. Escape and
+/// the browser's own close request close a `<dialog>` without asking the
+/// program; if the signal is not written back it stays `yes`, the effect
+/// sees no change on the next click, and the page is dead with nothing
+/// reported anywhere. `close()` is the step a close request performs, so
+/// calling it is exercising the same path Escape reaches.
+///
+/// The `if` region is in the view to make the disagreement visible: it
+/// reads the same signal, so it is what the *program* believes, while
+/// `dialog.open` is what the DOM is doing.
+#[test]
+fn closing_a_dialog_writes_back_so_the_next_click_reopens_it() {
+    let bundle = compile_source(
+        "state confirming is client Truth starting no\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"Delete\"\n\
+         \x20           on click\n\
+         \x20               set confirming to yes\n\
+         \x20       if confirming\n\
+         \x20           Text \"the program says open\"\n\
+         \x20       Dialog confirming, label is \"Confirm deletion\"\n\
+         \x20           Text \"Delete it?\"\n",
+    );
+    let mut context = context(false);
+    let verdict = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $dialog = findTag($host, 'dialog');\n\
+         const $button = findTag($host, 'button');\n\
+         const $believes = () => serialize($host).includes('the program says open');\n\
+         $button.fire('click');\n\
+         const $shown = $dialog.open + '/' + $believes();\n\
+         $dialog.close();\n\
+         const $dismissed = $dialog.open + '/' + $believes();\n\
+         $button.fire('click');\n\
+         'shown=' + $shown + ' dismissed=' + $dismissed + ' again=' + $dialog.open",
+    );
+    assert_eq!(
+        verdict, "shown=true/true dismissed=false/false again=true",
+        "a dismissed dialog must stay shut, the program must learn that it did, and the button \
+         that opened it must open it again"
+    );
+}
+
+/// A dialog whose signal starts `yes` opens once it is in the document,
+/// rather than throwing at load.
+///
+/// `showModal()` throws `InvalidStateError` on a node that is not
+/// connected. Left alone that is #205's shape exactly: an exception during
+/// module evaluation, a body that stays empty, and nothing said anywhere.
+/// `elements.js` therefore has two arms — open now if the node is in the
+/// document, and defer to the microtask after insertion if it is not.
+///
+/// **The root mounts its own tree before its bindings run, so this program
+/// takes the first arm.** It used to take the second, because a binding
+/// ran against a `<template>` clone; the assertion below moved when the
+/// mount did, and what it is really checking did not — the shim throws if
+/// `showModal()` is ever reached on a disconnected node, so a run that
+/// returns at all proves the element never took that path. The deferred
+/// arm is still live for a dialog that arrives in a hole filled later.
+#[test]
+fn a_dialog_that_starts_open_opens_after_the_tree_is_in_the_document() {
+    let bundle = compile_source(
+        "state showing is client Truth starting yes\n\
+         view\n\
+         \x20   Dialog showing, label is \"Welcome\"\n\
+         \x20       Text \"Hello\"\n",
+    );
+    let mut context = context(false);
+    let verdict = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $dialog = findTag($host, 'dialog');\n\
+         const $mounted = $dialog.open;\n\
+         flushMicrotasks();\n\
+         'mounted=' + $mounted + ' settled=' + $dialog.open",
+    );
+    assert_eq!(
+        verdict, "mounted=true settled=true",
+        "the dialog must be open by the time the mounting task ends, and must not have reached \
+         `showModal()` on a node outside the document to get there"
+    );
+}
+
+/// A modal moves focus into itself, so what a reader hears on arrival is
+/// its accessible name — and a `dialog` has none of its own. This follows
+/// `Image`'s `alt` and `Frame`'s `title`.
+#[test]
+fn a_dialog_without_a_name_is_refused() {
+    let refusals = support::refusals(
+        "state showing is client Truth starting no\n\
+         view\n\
+         \x20   Dialog showing\n\
+         \x20       Text \"Hello\"\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Dialog` needs `label is")),
+        "an unnamed modal must be refused: {refusals:?}"
+    );
+}
+
+/// Whether the modal is showing is a `Truth`, and dismissing one must not
+/// silently become a network write (§14B.5), so the signal is `client`.
+#[test]
+fn a_dialog_binds_a_client_truth_and_nothing_else() {
+    let wrong_type = support::refusals(
+        "state heading is client Text starting \"\"\n\
+         view\n\
+         \x20   Dialog heading, label is \"Confirm\"\n",
+    );
+    assert!(
+        wrong_type
+            .iter()
+            .any(|message| message.contains("`Dialog` binds to")),
+        "a modal bound to something other than a `Truth` must be refused: {wrong_type:?}"
+    );
+}

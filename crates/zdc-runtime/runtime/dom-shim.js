@@ -46,6 +46,24 @@ class Node {
   get nodeType() {
     return NODE_TYPE[this.kind];
   }
+
+  // `Dialog`'s binding asks this before it calls `showModal`, because a
+  // real `showModal` throws `InvalidStateError` on a node that is not in
+  // the document — and every binding this runtime attaches runs while the
+  // tree is still a clone of a `<template>`.
+  //
+  // ⚠️ THERE IS NO DOCUMENT HERE, so this cannot be the browser's answer
+  // and does not pretend to be. What it models is the distinction the
+  // binding actually turns on: a node still inside the fragment the
+  // template handed out is *not* placed, and a node whose ancestor chain
+  // ends at an element — which is what `mount` and every `insertBefore`
+  // produce — is. A freshly created element that was never appended is
+  // its own root and reports false, as it would in a browser.
+  get isConnected() {
+    let node = this;
+    while (node.parentNode) node = node.parentNode;
+    return node !== this && node.kind === 'element';
+  }
 }
 
 function baseNode(kind) {
@@ -220,6 +238,44 @@ const VALUE_AS_NUMBER = {
   configurable: true,
 };
 
+// The open/closed state machine of a `<dialog>`, and nothing else about
+// one (#53).
+//
+// ⚠️ THIS IS NOT A MODAL AND CANNOT BE. There is no top layer here, no
+// backdrop, no `inert`, no focus and no close request, so the four
+// properties `Dialog` exists for are all absent. They belong to the
+// browser suite (`zdc-cli/tests/browser.rs`), exactly as the HTML
+// parser's insertion modes and a number field's value sanitisation do.
+//
+// What is faithful is the part the emitted binding is written against,
+// and it is faithful in the way that matters — **it throws where a
+// browser throws**. `showModal()` on an already-open dialog is an
+// `InvalidStateError`, and so is one on a node that is not in the
+// document; a binding that got either wrong would fail here rather than
+// silently doing nothing, which is this file's whole rule. `close()` on a
+// closed dialog is the no-op HTML specifies, and a real close fires
+// `close`, which is the event the write-back listens for.
+//
+// The `open` attribute is written and removed alongside the property so
+// that a test can read the state out of a serialised tree.
+function dialogState(node) {
+  node.open = false;
+  node.showModal = function () {
+    if (this.open) throw new Error('showModal: the dialog is already open (InvalidStateError)');
+    if (!this.isConnected) {
+      throw new Error('showModal: the dialog is not in the document (InvalidStateError)');
+    }
+    this.open = true;
+    this.setAttribute('open', '');
+  };
+  node.close = function () {
+    if (!this.open) return;
+    this.open = false;
+    this.removeAttribute('open');
+    this.fire('close');
+  };
+}
+
 function createElement(tag) {
   const node = baseNode('element');
   node.tagName = tag;
@@ -235,6 +291,7 @@ function createElement(tag) {
   if (tag === 'input') {
     Object.defineProperty(node, 'valueAsNumber', VALUE_AS_NUMBER);
   }
+  if (tag === 'dialog') dialogState(node);
   node.style = {
     properties: {},
     setProperty(name, value) {
@@ -561,6 +618,32 @@ function walk(node, out = []) {
 /** The first element whose tag matches, or null. */
 function findTag(node, tagName) {
   return walk(node).find((n) => n.tagName === tagName) ?? null;
+}
+
+// --- the microtask queue --------------------------------------------------
+//
+// `Dialog` defers an opening that arrives while its node is still
+// detached, because `showModal()` throws on one that is not in the
+// document and every binding runs before the tree is inserted. A browser
+// drains these at the end of the current task; the engine this shim runs
+// in has no such queue at all, and a `queueMicrotask` that ran its
+// callback immediately would be the opposite of what the deferral is for
+// — it would call `showModal()` at exactly the moment that throws.
+//
+// So the drain is explicit, and a test says when the task ends. That is
+// the honest shape: "after the synchronous work that mounted the tree" is
+// what a browser means too, and here the test is the one that knows when
+// that was.
+const microtasks = [];
+
+function queueMicrotask(callback) {
+  microtasks.push(callback);
+}
+
+/** Test-only: end the current task, as a browser does. */
+function flushMicrotasks() {
+  // Drained rather than iterated: a callback may queue another.
+  while (microtasks.length > 0) microtasks.shift()();
 }
 
 // --- the uncaught-error channel -------------------------------------------

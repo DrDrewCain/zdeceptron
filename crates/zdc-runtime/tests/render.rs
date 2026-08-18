@@ -378,7 +378,7 @@ fn the_element_library_suite_passes() {
             ("list.js", flatten(zdc_runtime::LIST_JS)),
             ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
         ],
-        6,
+        8,
         zdc_runtime::Mode::Development,
     );
 }

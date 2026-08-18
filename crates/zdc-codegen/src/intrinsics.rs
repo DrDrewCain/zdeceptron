@@ -735,6 +735,58 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
              });\n",
             false,
         ),
+        // --- the modal (#53) -------------------------------------------
+        //
+        // `Dialog showing`, both ways. Here rather than in `dom.js` for
+        // the reason the two fields above are: the shipped runtime is
+        // against `zdc-bench`'s size gate, and a program that writes no
+        // modal must not carry the machinery for one.
+        //
+        // **`n.open`, never a remembered flag.** `showModal()` throws
+        // `InvalidStateError` on a dialog that is already open and
+        // `close()` on a closed one is a no-op, so the only sound question
+        // is what the DOM is doing. A cached copy of the last write is
+        // wrong the instant Escape closes the dialog without asking, which
+        // is the case this element exists for.
+        //
+        // **The `close` listener is the other half of that.** Escape, the
+        // browser's own close request and a `close()` this effect caused
+        // all arrive as one `close` event. Writing `false` back is what
+        // keeps the program and the DOM agreeing; without it the signal
+        // stays `true`, the effect sees no change on the next click, and
+        // the button that opened the dialog stops working. The write is
+        // idempotent by construction — `signal` compares with `Object.is`
+        // and returns early — so the close this effect *caused* costs one
+        // comparison and reaches nothing.
+        //
+        // **The deferral is not caution, it is the load path.** Every
+        // binding runs while the tree is still a clone of a `<template>`,
+        // before `mount` or an `ifInto` insertion connects it, and
+        // `showModal()` throws on a node that is not in the document. So a
+        // dialog whose signal *starts* true would throw at load and stop
+        // module evaluation before the view is ever attached — #205's
+        // failure shape. `queueMicrotask` runs after the synchronous task
+        // that did the inserting, and the callback asks again rather than
+        // trusting what was true when it was queued: the signal may have
+        // been written back to false in between.
+        //
+        // Focus is absent from this helper, and that is the design.
+        // Moving focus in, trapping it, making the rest of the page inert
+        // and **returning focus to whatever opened it** are all
+        // `showModal()`'s own behaviour. `zdc-cli/tests/browser.rs` asks a
+        // real browser whether it still does them.
+        "$modal" => (
+            "const $modal = (n, get, set) => {\n  \
+             effect(() => {\n    \
+             if (Boolean(get()) === n.open) return;\n    \
+             if (n.open) { n.close(); return; }\n    \
+             if (n.isConnected) n.showModal();\n    \
+             else queueMicrotask(() => { if (get() && !n.open && n.isConnected) n.showModal(); });\n  \
+             });\n  \
+             on(n, 'close', () => set(false));\n\
+             };\n",
+            false,
+        ),
         _ => return None,
     })
 }

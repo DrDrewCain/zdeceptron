@@ -164,6 +164,60 @@ release that breaks a program will say so here, with the repair.
   which the versioning note at the top of this file says should be a minor
   one; it is called 0.1.1 because 0.1.0 is eight days old and nothing depends
   on it yet, and calling it otherwise would be ceremony rather than honesty.
+### Added
+
+- **`Dialog` — a modal, and the whole of it is the accessibility (#53).**
+
+  ```zd
+  state confirming is client Truth starting no
+
+  view
+      Column
+          Button "Delete"
+              on click
+                  set confirming to yes
+          Dialog confirming, label is "Delete this file?"
+              Text "This cannot be undone."
+              Button "Cancel"
+                  on click
+                      set confirming to no
+  ```
+
+  `widgets/README.md` carried a section called *"`Modal` — not
+  expressible"*, with four reasons and one root: nothing a program writes
+  in this language moves focus. Every reason was correct. What was wrong
+  was the conclusion that the language therefore needed a statement that
+  moves focus — because `<dialog>` opened with `showModal()` already has
+  all four, specified by HTML and implemented by the browser. Focus moves
+  in when it opens; focus is *trapped*, not by a Tab handler but because
+  everything outside the top layer is inert, which shuts out the pointer
+  and find-in-page too; Escape closes it; and focus **returns to whatever
+  opened it**, which is the half a hand-rolled modal forgets. So this is
+  one element and one binding rather than a focus statement, a `tabindex`
+  argument and a keydown handler that redirects Tab.
+
+  Whether the modal is showing is the `client Truth` it binds, and the
+  binding is two-way for a reason that is not symmetry: a close request
+  closes a `<dialog>` **without asking the program**, so a signal left
+  saying `yes` is a page whose next click does nothing and whose failure
+  is reported nowhere. The binding is idempotent against `dialog.open` —
+  what the DOM is doing — rather than against the last value written,
+  because `showModal()` throws on a dialog that is already open and the
+  browser can invalidate a remembered flag at any moment.
+
+  There is no `open` argument and no non-modal dialog: `open` as an
+  attribute shows the box with none of the four properties above, under
+  markup that looks like it has them. `label` is required, following
+  `Image`'s `alt` and `Frame`'s `title`, because a modal moves focus into
+  itself and an unnamed one is announced as "dialog".
+
+  The one thing the compiler adds beyond the element is a deferral. Every
+  binding runs while the tree is still a clone of a `<template>`, and
+  `showModal()` throws on a node that is not in the document, so a dialog
+  whose signal *starts* `yes` would have thrown at load and taken module
+  evaluation with it — #205's shape. `crates/zdc-cli/tests/browser.rs`
+  asks a real browser for all of it, because the embedded engine has no
+  focus, no top layer and no `inert` to ask about.
 
 ## [0.1.0] — 2026-08-11
 

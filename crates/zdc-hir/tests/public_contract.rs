@@ -24,10 +24,16 @@ fn builtin_element_names_are_unique_and_round_trip() {
 
 /// Written out rather than derived, so that adding an element and marking
 /// it two-way by reflex fails here as well as in the `match`. A two-way
-/// binding is the one place a keystroke writes a signal, and §14B.5 rules
-/// on which signals it may write, so the list is worth pinning.
+/// binding is the one place an interaction writes a signal with no `set`
+/// statement anywhere, and §14B.5 rules on which signals it may write, so
+/// the list is worth pinning.
+///
+/// Nine of the ten are fields. `Dialog` is the tenth and is not one: its
+/// write happens when the dialog is dismissed, because a modal the browser
+/// closed while the program still believes it is open is a page whose next
+/// click does nothing.
 #[test]
-fn exactly_the_input_elements_are_two_way() {
+fn exactly_the_elements_that_write_back_are_two_way() {
     let two_way: Vec<_> = BuiltinElement::ALL
         .iter()
         .copied()
@@ -46,7 +52,8 @@ fn exactly_the_input_elements_are_two_way() {
             "Slider",
             "Select",
             "Radio",
-            "Checkbox"
+            "Checkbox",
+            "Dialog"
         ]
     );
 }

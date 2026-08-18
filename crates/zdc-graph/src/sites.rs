@@ -40,8 +40,13 @@ pub enum Site {
         path: Vec<PathKeySeg>,
         span: Span,
     },
-    /// A two-way `Input`/`Checkbox` binding: a write on every keystroke,
-    /// with no `set` statement to point at.
+    /// A two-way binding: a write with no `set` statement to point at.
+    ///
+    /// An `Input` or a `Checkbox` writes on every keystroke. A `Dialog`
+    /// writes when the browser closes it — Escape and the close request
+    /// dismiss a modal without asking the program — which is the same
+    /// thing for this pass's purposes: the value in the cell is the
+    /// visitor's, not the program's.
     Bind {
         /// The expression naming the bound signal. A binding has no `set`
         /// statement and so no place; this is its instance-fresh identity

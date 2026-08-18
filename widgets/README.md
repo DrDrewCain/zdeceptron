@@ -2,7 +2,7 @@
 
 Sixteen components — fourteen that a program names, two that a module
 instantiates for itself — and two records, in nine modules, built from
-nothing but the built-in elements — 68 of them, counted from
+nothing but the built-in elements — 69 of them, counted from
 `BuiltinElement::NAMES`, where #241's title says 65. These are ordinary
 `component` declarations that a program imports with `use`, exactly as
 `examples/blog.zd` imports `examples/layout.zd`.
@@ -241,42 +241,65 @@ point at, and no keyboard behaviour the browser does not already supply.
 
 ## What is not here, and exactly what was missing
 
-Two of the widgets #241 asks for are absent. Neither is hard; both are
-impossible, and the reasons are worth more than a broken version.
+One of the widgets #241 asks for is absent. It is not hard; it is
+impossible, and the reason is worth more than a broken version. The other
+one, `Modal`, was in this list until #53 and the answer turned out not to
+be a widget at all.
 
-### `Modal` — not expressible
+### `Modal` — answered by an element, not by a component
 
-A modal dialog is defined by what it does to focus. All four parts are
-unreachable:
+This section used to say a modal was unreachable, and it gave four
+reasons. All four were correct and all four had the same root: **nothing a
+program writes in this language moves focus.** There is no statement that
+calls a method on a node, `tabindex` is not in the closed argument set,
+and `aria-modal` was withheld because it describes a widget that owns
+focus.
 
-1. **Move focus into the dialog when it opens.** There is no statement that
-   calls a method on a node. `zdc check` on `focus "id"` reports
-   *"`focus` cannot begin a statement"* (E0104) and lists the fifteen words
-   a statement can begin with — `from` `keep` `sort` `map` `take` `set`
-   `add` `subtract` `append` `remove` `give` `with` `when` `each` `if`.
-   None of them is a call for effect.
-2. **Trap focus inside it.** Needs `tabindex` on the container and a
-   `keydown` handler that redirects Tab. `tabindex` is not in the closed
-   argument set — `Button "x", tabindex is 0` is refused — and redirecting
-   Tab needs the same missing focus call.
-3. **Restore focus to the trigger on close.** Same missing call.
-4. **Announce it as a dialog.** `role is "dialog"` is spellable and
-   `aria-modal` is not: it is deliberately absent from the ARIA table,
-   because it is an attribute of a widget that owns focus and nothing here
-   moves focus. A `role="dialog"` with no `aria-modal` and no focus move
-   is a region a screen reader user never enters. This is the part of
-   Modal the `aria-*` arguments did **not** unblock, and the reason is the
-   same one that blocks the other three.
+None of that changed. What changed is that a modal no longer needs any of
+it, because `Dialog` is a built-in element (#53) and the browser does all
+four:
 
-There is also no `dialog` element in the 68-name vocabulary, so the native
-top-layer, the backdrop and `inert` on the rest of the page are all out of
-reach, and nothing renders outside its place in the tree — there are no
-portals. Scroll lock would need to write `overflow` on the document
-element, which no widget can name.
+1. **Focus moves into the dialog when it opens** — the dialog focusing
+   steps, run by `showModal()`.
+2. **Focus is trapped inside it** — not by a Tab handler, but because
+   everything outside the top layer is *inert*, which also excludes the
+   pointer, find-in-page and the accessibility tree.
+3. **Focus returns to whatever opened it** — HTML's "close the dialog"
+   steps remember the previously focused element. This is the half a
+   hand-rolled modal forgets.
+4. **It is announced as a modal dialog** — a dialog shown with
+   `showModal()` is exposed as modal by the browser itself, so no
+   `aria-modal` is written and none is needed. `aria-modal` stays out of
+   the ARIA table for the reason it always was: as an argument it would
+   let any `Column` claim to be modal.
 
-A `Column` with `role="dialog"` inside an `if` compiles. It is not a modal,
-and shipping it under that name is how a program ends up believing it has
-one.
+Escape comes with them, and so do the backdrop and the top layer, so
+nothing here needs a portal or a scroll lock either.
+
+```zd
+state confirming is client Truth starting no
+
+view
+    Column
+        Button "Delete"
+            on click
+                set confirming to yes
+        Dialog confirming, label is "Delete this file?"
+            Text "This cannot be undone."
+            Button "Cancel"
+                on click
+                    set confirming to no
+```
+
+Whether it is showing is a `client Truth` and the binding is two-way:
+writing it opens and closes the dialog, and the dialog writes it back when
+the browser closes it. That last half is why this is an element rather
+than a component — Escape closes a `<dialog>` without asking the program,
+and a modal whose signal is not written back is a page whose next click
+does nothing.
+
+A `Column` with `role="dialog"` inside an `if` still compiles, and it is
+still not a modal. It is simply no longer the only thing available.
 
 ### `Menu` (the action menu) — not expressible
 
@@ -356,10 +379,14 @@ What is still missing, in the order it would unblock the most:
 
 1. **`tabindex`, and something that moves focus.** A statement, or an
    element argument that requests focus when a condition becomes true.
-   Without it no roving-tabindex widget and no dialog is reachable, ever.
-   This is now the whole of what stands between `tabs.zd` and the ARIA
-   tabs pattern, and the whole of what stands between this directory and
-   `Modal` and the action `Menu`.
+   Without it no roving-tabindex widget is reachable, so this is the whole
+   of what stands between `tabs.zd` and the ARIA tabs pattern, and the
+   whole of what stands between this directory and the action `Menu`.
+   It is no longer what stands between it and `Modal`: #53 answered that
+   one by adding a `Dialog` element and letting `showModal()` move the
+   focus, which is worth recording as a pattern — the platform has
+   already solved several of these, and reaching for the element is
+   cheaper and better than inventing the statement.
 2. **A timer.** `clock` reads the time; nothing schedules anything. Toast
    auto-dismiss and every debounce need one.
 3. **`use` that can reach a shared directory.** Until then a widget module

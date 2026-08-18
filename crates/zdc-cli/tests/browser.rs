@@ -1213,3 +1213,238 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
         "the runtime reported an error into the page:\n{dom}"
     );
 }
+
+const DIALOG_PROBE: &str = "state welcoming is client Truth starting yes\n\
+                            state confirming is client Truth starting no\n\
+                            \n\
+                            view\n\
+                            \x20   Column\n\
+                            \x20       Button \"Delete\", id is \"opener\"\n\
+                            \x20           on click\n\
+                            \x20               set confirming to yes\n\
+                            \x20       if confirming\n\
+                            \x20           Text \"the program says open\"\n\
+                            \x20       Dialog welcoming, label is \"Welcome\", id is \"welcome\"\n\
+                            \x20           Text \"Hello\"\n\
+                            \x20           Button \"Close\", id is \"dismiss\"\n\
+                            \x20               on click\n\
+                            \x20                   set welcoming to no\n\
+                            \x20       Dialog confirming, label is \"Confirm deletion\", id is \
+                            \"confirm\"\n\
+                            \x20           Text \"Delete it?\"\n";
+
+/// **A `Dialog` is a modal in a real browser: focus moves in, is trapped,
+/// and comes back out to whatever opened it (#53).**
+///
+/// Every claim `Slot::Open` rests on belongs to `showModal()`, and not one
+/// of them is checkable anywhere else in this workspace. `dom-shim.js`
+/// models the open/closed state machine — that much is driven in
+/// `zdc-codegen/tests/vocabulary.rs` — and models no focus, no top layer,
+/// no `inert` and no close request, so a binding that opened the dialog
+/// with an `open` attribute instead would pass every other suite while
+/// rendering a box that traps nobody. Five things are asked here:
+///
+///  1. **The deferred opening really opens.** `welcoming` starts `yes`,
+///     and every binding this compiler emits runs while the tree is still
+///     a clone of a `<template>`, where `showModal()` throws. Only the
+///     microtask deferral makes this dialog open at all, and only a
+///     browser has the distinction it turns on.
+///  2. **It is modal, not merely shown.** `:modal` matches a dialog opened
+///     with `showModal()` and nothing else; a hand-written `open`
+///     attribute renders the same box and matches nothing.
+///  3. **Focus is inside it, and the page behind it is inert.** Focusing
+///     the button underneath is attempted and must fail.
+///  4. **Focus returns to whatever opened it.** This is the half a
+///     hand-rolled modal forgets. HTML's "close the dialog" steps do it
+///     from the element's own record of the previously focused element,
+///     which is why the probe focuses the opener before clicking it — a
+///     scripted `click()` moves no focus, and a person's does.
+///  5. **Closing writes back, so the opener still works.** Escape's close
+///     request is a user-agent action no script can forge; `close()` is
+///     the step it performs and the same step Escape reaches, so the
+///     write-back path is the one under test either way.
+///
+/// The parser is asked at the same time, because `elements.rs`'s
+/// `PARSER_SAFE_TAGS` records an observation rather than making one, and
+/// `dialog` is new to that list.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_dialog_is_a_modal_with_a_focus_trap_in_a_real_browser() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let project = TempDir::new("browser-dialog-src");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    let source = project.path.join("dialog.zd");
+    std::fs::write(&source, DIALOG_PROBE).expect("the probe program");
+
+    let out = TempDir::new("browser-dialog");
+    let built = build(&source, &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the probe must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // A file beside the bundle rather than an inline `<script>`: the
+    // emitted document carries `script-src 'self'` (#146), so an inline
+    // probe is blocked and its verdict comes back empty.
+    //
+    // The first step is deferred once, because the opening of `welcome` is
+    // queued as a *microtask* by the module that mounted the view and a
+    // module script may share a task with this one. The virtual-time
+    // budget advances the timer.
+    //
+    // Everything after that is driven by the dialog's own `close` event
+    // and not by a second timer, and that is a correction rather than a
+    // preference. HTML queues `close` on a task source; a `setTimeout(…,
+    // 0)` is another task with no ordering against it, and the first
+    // version of this probe read the write-back from one — which passed
+    // once and then failed, having asked before the event was delivered.
+    // The listener is registered after the program's own, so listener
+    // order puts it after the write-back and after the effects that write
+    // flushed. Nothing about the element races; the probe did.
+    std::fs::write(
+        out.path.join("probe.js"),
+        r#"const said = [];
+const at = (id) => document.getElementById(id);
+
+setTimeout(() => {
+  // The parser measurement `PARSER_SAFE_TAGS` records: a `<dialog>` must
+  // not have a block child moved, or the emitted offset walk names a node
+  // the browser did not put there (#205).
+  const shape = document.createElement('template');
+  shape.innerHTML = '<dialog><div><span>x</span></div></dialog>';
+  said.push('nesting=' + ((shape.content.firstChild.firstChild || {}).nodeName || 'none'));
+
+  const welcome = at('welcome');
+  const modal = at('confirm');
+  const opener = at('opener');
+
+  // 1 and 2: a dialog whose signal starts `yes` is open, and it is modal.
+  said.push('welcome=' + welcome.open + ',' + welcome.matches(':modal'));
+  // 3: focus is inside it, and the page behind it cannot take focus back.
+  said.push('welcome-focus=' + welcome.contains(document.activeElement));
+  opener.focus();
+  said.push(
+    'behind-inert=' +
+      (document.activeElement !== opener && welcome.contains(document.activeElement))
+  );
+
+  welcome.addEventListener('close', () => {
+    said.push('welcome-closed=' + welcome.open);
+
+    // A person who activates a button has focused it; a scripted click
+    // does not, and what focus returns to is what had it when the dialog
+    // opened.
+    opener.focus();
+    opener.click();
+    said.push('confirm=' + modal.open + ',' + modal.matches(':modal'));
+    said.push('confirm-focus=' + modal.contains(document.activeElement));
+
+    // 5: the program learned about the dismissal, and the opener opens it
+    // again. Read here rather than after a timer, because this listener
+    // runs after the program's own and therefore after the write-back.
+    modal.addEventListener('close', () => {
+      said.push('wrote-back=' + !document.body.textContent.includes('the program says open'));
+      opener.click();
+      said.push('reopened=' + modal.open);
+      at('verdict').textContent = said.join(' | ');
+    }, { once: true });
+
+    // 4: what Escape ends in, and focus comes back out synchronously —
+    // only the event is queued.
+    modal.close();
+    said.push('returned=' + (document.activeElement === opener));
+  }, { once: true });
+
+  at('dismiss').click();
+}, 0);
+"#,
+    )
+    .expect("the probe module");
+    let page = out.path.join("index.html");
+    let document = std::fs::read_to_string(&page).expect("the emitted document");
+    std::fs::write(
+        &page,
+        document.replace(
+            "</body>",
+            r#"<pre id="verdict"></pre><script type="module" src="./probe.js"></script></body>"#,
+        ),
+    )
+    .expect("the probe page");
+
+    let profile = TempDir::new("browser-dialog-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    assert!(
+        !dom.contains("zd-error"),
+        "the runtime reported an error into the page:\n{dom}"
+    );
+    for (claim, expected) in [
+        (
+            "a `<dialog>` keeps its block children, so the offset walk survives the parse; \
+             `PARSER_SAFE_TAGS` in `elements.rs` records this measurement",
+            "nesting=DIV",
+        ),
+        (
+            "a dialog whose signal starts `yes` opens once the tree is in the document. \
+             `showModal()` throws on a detached node, and every binding runs before `mount`, \
+             so this is the deferral in `$modal` working — or not",
+            "welcome=true,true",
+        ),
+        (
+            "focus moves into the dialog when it opens",
+            "welcome-focus=true",
+        ),
+        (
+            "the page behind a modal is inert, so focus cannot be taken back out of it",
+            "behind-inert=true",
+        ),
+        (
+            "writing the signal `no` closes the dialog",
+            "welcome-closed=false",
+        ),
+        (
+            "writing the signal `yes` opens a modal, not a merely-shown dialog",
+            "confirm=true,true",
+        ),
+        (
+            "focus moves in on every opening, not only the first",
+            "confirm-focus=true",
+        ),
+        (
+            "focus returns to whatever opened the dialog. This is the half everyone forgets, \
+             and it is `showModal()`'s own record of the previously focused element",
+            "returned=true",
+        ),
+        (
+            "closing writes the signal back, so the program and the DOM agree about whether \
+             the modal is showing",
+            "wrote-back=true",
+        ),
+        (
+            "and the button that opened it opens it again. Without the write-back this is \
+             where a modal dies: the signal is still `yes`, the effect sees no change, and \
+             nothing happens",
+            "reopened=true",
+        ),
+    ] {
+        assert!(
+            dom.contains(expected),
+            "{claim}: expected `{expected}` in the probe output.\n--- dumped DOM ---\n{dom}"
+        );
+    }
+}
