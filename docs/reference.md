@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 71 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 73 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**

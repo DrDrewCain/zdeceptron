@@ -232,7 +232,7 @@ total in prose is a number nobody re-derives.
 | `zdc-bench` | 60 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
 | `zdc-deploy` | 57 | Four platform adapters and the portability claim. `tests/wire_format.rs` runs the generated router beside `zdc-host` and requires the two to answer the same bytes. |
 | `zdc-doc` | 26 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
-| `zdc-diagnostics` | 66 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-diagnostics` | 67 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 85 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
