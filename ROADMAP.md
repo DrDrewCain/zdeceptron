@@ -275,12 +275,26 @@ Deliberate exclusions, so their absence is not read as an oversight.
 - **Incremental recompilation, cross-file imports beyond `use`, per-user durable scoping,
   authentication, typeclasses, higher-rank types, a general effect system.** All in §13's v1
   non-goals.
-- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
-  no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
-  keep stating it rather than quietly dropping the comparison.
-- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses
+- **A React/SolidJS benchmark arm.** ~~Not deferred by choice — it needs a package manager, CI has
+  no network, and §8 forbids a Node dependency.~~ **DECIDED 2026-08-16 (#158): deferred by choice
+  after all, and two of the three reasons above were false — CI has a network and §8 governs
+  emitted functions rather than the test suite.** What holds is that the suite is an ordinary
+  workspace test, which is what makes a regression a build failure, and that an arm measured
+  against a 506-line DOM shim built to answer this runtime's calls would be a number about the
+  shim. `BENCHMARKS.md`'s
+  [*The two arms that are not here*](BENCHMARKS.md#the-two-arms-that-are-not-here) carries the argument
+  and names what reverses it: a browser-hosted counter, which `ci.yml` is already one job away
+  from. The comparison keeps being stated rather than quietly dropped.
+- **`insta` snapshot tests.** ~~The spec's testing table asks for them and the project uses
   ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
-  only so the deviation is on the record.
+  only so the deviation is on the record.~~ **DECIDED 2026-08-16 (#157): not adopted, and the
+  spec's §11 entry is amended rather than owed.** It was tried and removed — one 853-line AST
+  snapshot, deleted with the dependency in `87b1b5d` — and the reason it was brittle is the
+  reason it stays out: a snapshot's expected value is written by the code under test, so it
+  cannot be written first and cannot be watched to fail, which is the rule `CONTRIBUTING.md`
+  opens its test section with.
+  [*Snapshot tests, and the dependency this project does not take*](CONTRIBUTING.md#snapshot-tests-and-the-dependency-this-project-does-not-take)
+  carries the argument, the bless mechanism this repository uses instead, and what reverses it.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions
