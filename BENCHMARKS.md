@@ -262,7 +262,7 @@ The per-file columns are what the compiler emitted. **`shipped`** is the same bu
 | `runtime/markup.js (a program with Prose only)` | 408 | 2686 |
 | `runtime/list.js (a program with an each only)` | 2544 | 10952 |
 | `runtime/base.css` | 1088 | 3641 |
-| `runtime/elements.js (direct emission only)` | 9827 | 24937 |
+| `runtime/elements.js (direct emission only)` | 10251 | 26992 |
 <!-- end generated -->
 
 **Two transformations stand between a runtime file and a reader, and the survey measures all
