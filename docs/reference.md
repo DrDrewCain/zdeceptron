@@ -2347,7 +2347,7 @@ nonzero when it reports an error and zero when everything it reports is a
 warning, so a warning is something to read rather than something to fix
 before the build will run. `W0330`, `W0331` and `W-REL-01` are the three.
 
-The families:
+The families, in pipeline order:
 
 | prefix | |
 |---|---|

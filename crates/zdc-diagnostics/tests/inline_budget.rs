@@ -886,8 +886,10 @@ const UNREACHABLE: &[(&str, &str)] = &[
     ),
     (
         "E0303",
-        "needs both a trigger and `durable per visitor`; the trigger has no syntax, and the \
-         placement is refused at the parser by `E0107`",
+        "needs a trigger to read `durable per visitor` state. The trigger half has syntax \
+         now — #18's `every` on a `server` declaration — so the reason this is unreachable \
+         is the other half alone: `durable per visitor` is refused at the parser by \
+         `E0107`, and a program cannot get as far as reading it from anywhere",
     ),
     (
         "E0364",
