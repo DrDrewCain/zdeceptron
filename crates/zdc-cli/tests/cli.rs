@@ -569,6 +569,126 @@ fn checking_a_file_with_three_type_errors_reports_all_three() {
 
 // --- build ----------------------------------------------------------------
 
+/// **Residual risk R6, end to end.**
+///
+/// §21.8.3's R6 is that the grants §21.7's soundness leans on are the ones
+/// no review artifact reaches. Before `--report` there was no artifact at
+/// all: a bundle built from the program below named `queryParam` only as a
+/// JavaScript import, and nothing anywhere said that the program's
+/// integrity rests on a `gives pure` claim about it.
+///
+/// So the assertions are: the file exists, it names the grant, it locates
+/// it, and it does **not** carry `attackerReachable` — which stays
+/// withdrawn for the reason §21.8.7 withdrew it, since a walk over this
+/// grant's arguments finds one string literal while the JavaScript reads
+/// the request URL.
+#[test]
+fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
+    let workspace = TempDir::new("build-report-src");
+    std::fs::create_dir_all(&workspace.path).expect("a temporary project directory");
+    std::fs::write(
+        workspace.path.join("request.js"),
+        "export function queryParam(name) {\n  \
+         return new URLSearchParams(location.search).get(name) ?? \"\";\n}\n",
+    )
+    .expect("the foreign module");
+
+    let entry = workspace.path.join("app.zd");
+    std::fs::write(
+        &entry,
+        "foreign queryParam is anywhere\n    \
+         from  \"./request.js\" as \"queryParam\"\n    \
+         takes name is Text\n    \
+         gives pure Text\n\n\
+         state shown is client Text from queryParam with name is \"holder\"\n\n\
+         view title is \"Report\"\n    Column\n        Text shown\n",
+    )
+    .expect("the entry file");
+
+    let out = TempDir::new("build-report-out");
+    let output = run(&[
+        "build",
+        entry.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+        "--report",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let text = std::fs::read_to_string(out.path.join("report.json")).expect("dist/report.json");
+    let report: serde_json::Value = serde_json::from_str(&text).expect("report.json is JSON");
+
+    let asserted = report["asserted"].as_array().expect("an `asserted` array");
+    assert_eq!(
+        asserted.len(),
+        1,
+        "the program declares one asserted grant:\n{text}"
+    );
+    assert_eq!(asserted[0]["code"], "G-FGN-P");
+    assert_eq!(asserted[0]["name"], "queryParam");
+    assert_eq!(asserted[0]["gives"], "pure");
+    assert_eq!(asserted[0]["from"], "./request.js");
+    assert_eq!(
+        asserted[0]["declaredAt"]["line"], 1,
+        "a reviewer is sent to the line carrying the claim:\n{text}"
+    );
+    assert_eq!(
+        asserted[0]["calls"]
+            .as_array()
+            .expect("a `calls` array")
+            .len(),
+        1,
+        "the one call, so a reader can see the claim is load-bearing:\n{text}"
+    );
+
+    // No such **key**, at the top level or on an entry. The phrase does
+    // occur in the file, in the sentence explaining its absence, so this
+    // asks the structure rather than the text.
+    assert!(
+        report.get("attackerReachable").is_none() && asserted[0].get("attackerReachable").is_none(),
+        "§21.8.3 and §21.8.7 withdrew that field and landing the report did not \
+         restore it:\n{text}"
+    );
+    let not_claimed = report["notClaimed"]
+        .as_array()
+        .expect("a `notClaimed` array");
+    let states_the_absence = not_claimed
+        .iter()
+        .filter(|line| {
+            line.as_str()
+                .is_some_and(|s| s.contains("attackerReachable"))
+        })
+        .count();
+    assert_eq!(
+        states_the_absence, 1,
+        "a field a reader was told to expect is absent, so the file has to say so:\n{text}"
+    );
+}
+
+/// The flag is a flag: a plain `zdc build` writes a bundle a browser loads
+/// and nothing else. A review artifact in every `dist/` is a review
+/// artifact nobody asked for and a file a static host would serve.
+#[test]
+fn a_build_without_the_flag_writes_no_report() {
+    let out = TempDir::new("build-no-report");
+    let output = run(&[
+        "build",
+        example("hello.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !out.path.join("report.json").exists(),
+        "`--report` is what asks for it"
+    );
+}
+
 /// Exit 0 and a complete `dist/`: the success half of the contract a deploy
 /// script depends on. `elements.js` is deliberately absent — generated code
 /// never imports it (spec §16.3.1).

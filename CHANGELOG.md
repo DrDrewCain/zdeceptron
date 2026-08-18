@@ -308,6 +308,41 @@ release that breaks a program will say so here, with the repair.
   arrives. No `hint`: `placeholder` does nothing on a file input, as it does
   nothing on a date one, and the accessible name comes from a `Label` with
   `controls`.
+### Added
+
+- **`zdc build --report` writes `dist/report.json`: every claim about
+  JavaScript the program's integrity rests on, and nothing that says whether
+  the program is safe.** Residual risk R6 (#31).
+
+  Two of the eight ways a value becomes Trusted are asserted rather than
+  checked: `gives pure T` says a foreign's result is a function of its
+  arguments, and `gives trusted T` says it is not attacker-chosen whatever
+  went in. Both are a human's word about a module the compiler cannot read,
+  and §21.7's soundness argument leans on them — so the design specified a
+  report that would let a reviewer find them, and the report was never built.
+  A reader of a bundle had one route to the assertion holding their program
+  up, which was to read the source knowing what to look for.
+
+  The file lists, per assertion: the declaration and its line, the module and
+  export it imports, every call site, and every `release` whose body reaches
+  it. That last list is the useful one — a release is where a program
+  declassifies, so an entry there says *this unchecked claim is what lets that
+  release compile*. Every `trusted p` clause is listed too, which makes true a
+  sentence E-REL-08's help text had been shipping since before the flag
+  existed. The prelude's twenty-seven purity grants are named rather than
+  located, because a prelude file is parsed on its own and a line number
+  resolved against the wrong file is worse than none.
+
+  **There is no `attackerReachable` field**, and there is not going to be one.
+  The design specified it and §21.8 withdrew it twice over. The reason worth
+  repeating is that giving a purity grant an argument chain — which is what
+  #31 asked for — would not help: the channel is inside the JavaScript, not in
+  the argument list. A query-string reader takes a string literal and reads
+  `location.search`, so a walk over its arguments answers "no
+  attacker-controlled value reaches this" about the exact grant a visitor
+  steers with a query string. An available, cheap, false answer is worse than
+  none. The report says which assertions exist and which releases rest on
+  them, and its own `notClaimed` array says the rest.
 
 ## [0.1.0] — 2026-08-11
 

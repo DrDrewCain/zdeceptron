@@ -15,11 +15,13 @@
 //!
 //! So this is the mechanism. §21.8.8 names three surfaces the claim must
 //! not reach — `report.json`'s framing, the diagnostics' help text, and
-//! §21.7.10's sentence — and two of the three exist today and are scanned
-//! here. The third does not exist yet: `--report` is unimplemented, and
-//! `zdc-cli` carries the standing instruction that when it lands it must
-//! not carry `attacker_reachable`. When it lands, its strings belong in
-//! [`shipped_text`] on the same day.
+//! §21.7.10's sentence — and all three exist today and are scanned here.
+//! The third arrived with `zdc build --report` (residual risk R6), and it
+//! arrived carrying the standing instruction it was given: no
+//! `attacker_reachable`, for the two reasons `zdc-graph`'s `report` module
+//! states. Its fixed prose is [`zdc_graph::NOT_CLAIMED`], which is the
+//! only copy of those sentences — the renderer indexes the slice rather
+//! than restating it — so scanning the slice scans what a user reads.
 //!
 //! # Why the affirmative form, and not the word
 //!
@@ -68,15 +70,22 @@ const FORBIDDEN: &[&str] = &[
 
 /// Every string that reaches a user, from the surfaces that exist today.
 ///
-/// The long form behind `zdc explain` is the whole of it for now: it is
-/// where §21.8.8's "diagnostics' help text" lives, and it is the surface
-/// with room enough to editorialise, which is what makes it the one most
-/// likely to acquire a claim.
+/// Two of them. The long form behind `zdc explain` is where §21.8.8's
+/// "diagnostics' help text" lives, and it is the surface with room enough
+/// to editorialise, which is what makes it the one most likely to acquire
+/// a claim. `report.json`'s `notClaimed` array is the other, and it is the
+/// surface §21.8.8 names *first*: a report is read by somebody deciding
+/// whether a program is safe to ship, which is the moment a sentence
+/// telling them it is would do the most damage.
 fn shipped_text() -> Vec<(String, String)> {
-    explain::EXPLANATIONS
+    let explanations = explain::EXPLANATIONS
         .iter()
-        .map(|entry| (entry.code.to_string(), entry.render()))
-        .collect()
+        .map(|entry| (entry.code.to_string(), entry.render()));
+    let report = zdc_graph::NOT_CLAIMED
+        .iter()
+        .enumerate()
+        .map(|(index, line)| (format!("report.json notClaimed[{index}]"), line.to_string()));
+    explanations.chain(report).collect()
 }
 
 #[test]
@@ -92,6 +101,19 @@ fn no_shipped_sentence_claims_a_program_is_robust() {
         "the scan found only {} explanations, which means it stopped working \
          rather than that the compiler lost its diagnostics",
         shipped.len()
+    );
+
+    // Per surface, not only in total: `report.json` is the surface §21.8.8
+    // names first, and an explanation corpus of two hundred entries would
+    // hide its absence from the count above.
+    let from_the_report = shipped
+        .iter()
+        .filter(|(code, _)| code.starts_with("report.json"))
+        .count();
+    assert_eq!(
+        from_the_report,
+        zdc_graph::NOT_CLAIMED.len(),
+        "the report's own prose has to be in the scan, and all of it"
     );
 
     let mut violations = Vec::new();

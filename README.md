@@ -330,6 +330,16 @@ revalidated. Nothing else is renamed: an image under `assets/` is named by the
 program's own text, and a compiler may only rename a file it can prove it
 named.
 
+`--report` adds one more file, `report.json`, and it is for a reader rather
+than for a browser. A `foreign` whose `gives` line says `pure` or `trusted` is
+making a claim about somebody's JavaScript that the compiler cannot check and
+the program's integrity rests on; the report lists every one of them, where it
+is declared, and which `release` bodies depend on it. It is an enumeration and
+not a verdict, and its own `notClaimed` array says what it is not telling you.
+
+No example in this repository writes either word, so every example's report has
+an empty `asserted` list — which is the answer, not the absence of one.
+
 Serve it over HTTP. The document loads ES modules, so opening `index.html` as a
 `file://` URL will not work:
 
@@ -366,6 +376,7 @@ program: it declares no view of its own and exists to be run by `zdc test`.
 zdc new     notes                  # writes notes/, then tells you to run zdc dev
 zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
 zdc build   examples/writing.zd    # writes dist/, no toolchain needed
+zdc build   examples/writing.zd --report  # + dist/report.json, the grants nobody checks
 zdc test    examples/sorting.test.zd  # checks each `test`, exit 1 if one is false
 zdc dev     examples/counter.zd    # http://127.0.0.1:4321
 zdc doc     examples/guestbook.zd  # writes doc/, Markdown, placements first

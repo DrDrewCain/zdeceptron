@@ -712,10 +712,18 @@ impl Analysis {
     /// gives the `ifc` stage.
     ///
     /// The obligations and the solved labels stay behind, deliberately.
-    /// They are §19.5's audit trail, and §21.6 item 18 forbids shipping
-    /// `report.json`'s framing before the claim question is settled — so
-    /// the rules reach the user as diagnostics and the report does not
-    /// reach them at all.
+    /// They are §19.5's audit trail, and the rules reach the user as
+    /// diagnostics: a `Verdict` is what §17.1.2's table gives this stage,
+    /// and widening it to carry an audit trail would put the trail on the
+    /// path of every command rather than of the one that asks for it.
+    ///
+    /// `report.json` is that command — `zdc build --report`, see
+    /// [`crate::report`] — and it is built from the HIR rather than from
+    /// what is dropped here, because what a `foreign` claims about its
+    /// result is a constant of its declaration. §21.6 item 18 forbade
+    /// shipping the report's *framing* before the claim question was
+    /// settled; §21.8.8 settled it on option 2, and what ships is the
+    /// enumeration without the claim.
     pub fn into_diagnostics(self) -> Vec<GraphError> {
         self.diagnostics
     }
