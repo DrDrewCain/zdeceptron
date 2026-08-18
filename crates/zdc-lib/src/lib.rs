@@ -242,6 +242,7 @@ mod tests {
                 "bitAnd",
                 "bitOr",
                 "bitXor",
+                "bothOf",
                 "cbrt",
                 "civilDateOf",
                 "civilTimeOf",

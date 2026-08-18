@@ -180,6 +180,31 @@ fn an_option_can_be_eliminated_in_expression_position() {
     );
 }
 
+/// **Two `Remote of T`s combine into one, and the caller writes three
+/// arms rather than nine** (#20).
+///
+/// §17.7 recorded this as having no answer — "without records-in-the-
+/// library or tuples, `bothOf` has no return type to give". A pair is
+/// what it was waiting for, and `zip`'s comment in `list.zd` says the two
+/// walls are one issue rather than two. `zip` got past it first.
+///
+/// The type is the whole test: `Remote of Pair of A to B` is what makes
+/// the combinator expressible, and `.first` and `.second` are how the
+/// caller reads it back out.
+#[test]
+fn two_remotes_combine_into_a_remote_pair() {
+    accept(
+        "state count is server Whole from 1\n\
+         state label is server Text from \"x\"\n\
+         state both is client Remote of Pair of Whole to Text \
+         from bothOf with left is count, right is label\n\
+         state pair is client Pair of Whole to Text \
+         from readyOr with result is both, \
+         fallback is (Pair with first is 0, second is \"\")\n\
+         state shown is client Text from pair.second\n",
+    );
+}
+
 #[test]
 fn a_remote_can_be_eliminated_in_expression_position() {
     accept(
