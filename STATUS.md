@@ -225,7 +225,7 @@ stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
 | `zdc-bench` | 54 | Four of them ignored surveys. Includes the exact-match `BENCHMARKS.md` gate, and `survey_emitter_growth`, which times the emitter against the size of one view — the axis the other surveys hold fixed, and the one issue #8's cubic path scheduling was hiding on. |
-| `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
+| `zdc-deploy` | 45 | Four platform adapters, the portability claim, and the cache policy each one emits in its own format (#137). |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
