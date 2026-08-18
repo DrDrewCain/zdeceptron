@@ -48,7 +48,7 @@
 
 import { effect, onCleanup } from './signal.js';
 
-const SCENE_SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /// Mount a scene onto `canvas`.
 ///
@@ -368,7 +368,7 @@ function polylines(shape) {
   if (hit) return hit;
   const out = [];
   for (const sub of subpaths(shape.d)) {
-    const element = document.createElementNS(SCENE_SVG_NS, 'path');
+    const element = document.createElementNS(SVG_NS, 'path');
     element.setAttribute('d', sub);
     let length = 0;
     try {
