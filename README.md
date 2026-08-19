@@ -282,7 +282,7 @@ prerequisite — there is no Node, no npm and no bundler anywhere in this.
 
 ```sh
 cargo install zdc-cli
-zdc --version                         # zdc 0.1.0
+zdc --version                         # zdc 0.2.0
 ```
 
 The crate is `zdc-cli` and the binary is `zdc`. Twenty crates go up with
@@ -297,7 +297,7 @@ is the project's name.
 ```sh
 git clone https://github.com/DrDrewCain/zdeceptron && cd zdeceptron
 cargo build --release
-./target/release/zdc --version        # zdc 0.1.0
+./target/release/zdc --version        # zdc 0.2.0
 ```
 
 **A prebuilt binary**, once a release is published rather than drafted:
