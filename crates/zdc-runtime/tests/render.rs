@@ -337,6 +337,32 @@ fn the_list_reconciler_suite_passes() {
 
 /// The clock: `clock.js` against a scheduler the suite controls.
 ///
+/// **The suite for the module that had none.** `media.js` was the one entry
+/// in the mutation harness's `UNREACHED` list with no answer to give:
+/// `browser_state.rs` asserts a bundle *links* it, which is a claim about
+/// the emitter, and nothing anywhere evaluated a line of it.
+///
+/// `matchMedia` is faked for the reason `clock.test.js` fakes a scheduler.
+/// The question worth asking is the one a real browser cannot be asked on
+/// demand — does a reader who turns Reduce Motion on *while the page is
+/// open* see it — and that is the whole reason this is a signal rather
+/// than a `foreign` reading `.matches` once.
+#[test]
+fn the_media_suite_passes() {
+    run_suite(
+        "media.test.js",
+        include_str!("../runtime/media.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("media.js", flatten(zdc_runtime::MEDIA_JS)),
+        ],
+        7,
+        // `media.js` carries no `// $dev` block, so either mode runs the
+        // same bytes.
+        zdc_runtime::Mode::Development,
+    );
+}
+
 /// **The one suite here whose subject is what happens after a dispose.** A
 /// timer that outlives its view is a leak with no symptom — nothing
 /// renders wrongly, a callback simply keeps running — so it cannot be

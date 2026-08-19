@@ -205,6 +205,11 @@ const DETECTORS: &[Detector] = &[
         modules: &["runtime/signal.js", "runtime/keys.js"],
     },
     Detector {
+        suite: "media.test.js",
+        source: include_str!("../runtime/media.test.js"),
+        modules: &["runtime/signal.js", "runtime/media.js"],
+    },
+    Detector {
         suite: "clock.test.js",
         source: include_str!("../runtime/clock.test.js"),
         modules: &["runtime/signal.js", "runtime/clock.js"],
@@ -300,17 +305,6 @@ const UNREACHED: &[(&str, &str)] = &[
         "runtime/store.js",
         "driven from `tests/transport_contract.rs` here and from \
          `zdc-codegen`'s `live_context`, both through the Rust API",
-    ),
-    (
-        // The one entry with no answer to give. Worth reading twice: the
-        // reason this list exists is that "which modules are covered" is a
-        // question nobody had asked mechanically, and asking it turned up
-        // a shipped module that nothing anywhere executes.
-        "runtime/media.js",
-        "NOWHERE. `zdc-codegen/tests/browser_state.rs` asserts that a bundle \
-         links it and that a bundle with no `media` query does not, which is \
-         a claim about the emitter. Nothing in this repository evaluates a \
-         line of it — not in this engine, and not in the browser job",
     ),
     (
         "runtime/remembered.js",
