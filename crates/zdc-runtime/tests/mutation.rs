@@ -871,10 +871,42 @@ fn source_of(path: &str) -> &'static str {
 fn flatten(source: &str) -> String {
     source
         .lines()
-        .filter(|line| !line.trim_start().starts_with("import "))
-        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .map(|line| {
+            // An import is dropped, because every module is already in this
+            // one scope — except for the names it renames, which the drop
+            // would leave undeclared.
+            //
+            // Latent here rather than live, and kept in step deliberately.
+            // `store.js` is the one runtime module that renames on import
+            // (`decode as decodeValue`) and it is in `UNREACHED` below, so
+            // no suite flattens it today. The identical fault in
+            // `zdc-codegen`'s copy of this function was not latent: it meant
+            // no program with a `request` or a server read had ever been
+            // prerendered. Two copies of a function are two places for one
+            // bug, and this is the second.
+            if line.trim_start().starts_with("import ") {
+                return renames_of(line);
+            }
+            line.strip_prefix("export ").unwrap_or(line).to_string()
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `const` lines an import's renames need, and nothing for the rest.
+fn renames_of(line: &str) -> String {
+    let Some(open) = line.find('{') else {
+        return String::new();
+    };
+    let Some(close) = line[open..].find('}') else {
+        return String::new();
+    };
+    line[open + 1..open + close]
+        .split(',')
+        .filter_map(|clause| clause.split_once(" as "))
+        .map(|(from, to)| format!("const {} = {};", to.trim(), from.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Evaluate one suite, with at most one module replaced by a mutant, and
