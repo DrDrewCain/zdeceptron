@@ -67,13 +67,17 @@ one file's convenience.
 
 ---
 
-## 3. `record … unique` — identity keys for lists
+## 3. ~~`record … unique` — identity keys for lists~~ — **landed**
 
-**Unblocks: O(1) list mutation. The best effort-to-payoff ratio in this document.**
+**Unblocked: O(1) list mutation. It had the best effort-to-payoff ratio in this document, and
+that is why it went first of the three.**
 
-Still refused, verified by compiling a probe: `unique email is Text` in a record body gives
-*"Expected `is` after the field name."* Because no record can declare identity, **every list in
-the repository reconciles positionally**, and `BENCHMARKS.md` measures what that costs:
+The probe this section was written around now compiles. `unique email is Text` in a record body
+was *"Expected `is` after the field name."*; it is a declaration, and `examples/todo.zd` emits
+the key function `(item) => item.id` into `eachInto`. A record that declares no `unique` still
+reconciles positionally — that is now the default rather than the only option.
+
+The measurement is kept because the trade-off it records did not go away. `BENCHMARKS.md`:
 
 | Operation, N=1,000 | positional (today) | identity (`unique`) |
 |---|---|---|
@@ -82,14 +86,13 @@ the repository reconciles positionally**, and `BENCHMARKS.md` measures what that
 | replace all rows | 3,000 | 8,000 |
 
 The removal row is the headline: identity keying is the difference between O(1) and O(n) on the
-most common list operation there is. The work is small — one parser rule, one entry in the type
-table, one argument changed at the `eachInto` call site, and the emitter's key function. The
-benchmark harness already has the identity-keyed arm wired up and measured, so the payoff is
-known before the work starts.
+most common list operation there is. The work was as small as this section predicted — one
+parser rule, one entry in the type table, one argument at the `eachInto` call site, and the
+emitter's key function.
 
-It ranks third and not first only because it makes existing programs *faster* rather than making
-new programs *possible*. If the question were value per hour it would be first, and it is cheap
-enough that it should not wait for items 1 and 2.
+It was ranked third rather than first because it makes existing programs *faster* rather than
+making new programs *possible*. It went first anyway, on the argument made here: value per hour,
+and cheap enough not to wait.
 
 The two rows above that are *worse* under identity keying are not a reason to delay: they are a
 reason to put both numbers in §16.6's table, which currently presents `unique` as strictly
@@ -134,13 +137,20 @@ lands.
 
 ---
 
-## 6. Source maps
+## 6. ~~Source maps~~ — **landed, for statements**
 
-**Unblocks: debugging.** Nothing depends on it and no example fails without it. But the first
-person to hit a runtime error in generated JavaScript will want it, and now that server and
-durable programs actually execute, that person arrives sooner than this ranking suggests.
+**Unblocked: debugging.** Nothing depended on it and no example failed without it, but this
+section argued the first person to hit a runtime error in generated JavaScript would want it
+sooner than the ranking suggested. It went in.
 
-No `sourceMap` exists anywhere in the tree.
+`crates/zdc-codegen/src/sourcemap.rs` writes a Source Map v3 beside every emitted module and the
+bundle names it with a `//# sourceMappingURL` line — which survives minification, because a
+pragma is not prose. `crates/zdc-codegen/tests/sourcemap.rs` decodes the map it asserts against
+rather than comparing strings, since every way of getting base64 VLQ wrong still parses.
+
+**What it covers is narrower than "source maps" reads**, and §4 of `STATUS.md` states it: one
+mapping per emitted *statement* in a top-level `function` or declaration. Handler and view code
+are not mapped.
 
 ---
 
@@ -208,6 +218,11 @@ with numbers, which is what makes it worth reading.
 [`EXPRESSIBILITY.md`](EXPRESSIBILITY.md) has the method; the result is **65.5% of the target's
 14,499 non-test TypeScript lines**, measured by porting it — `~/zdc-portfolio` @ `8a79990`, 21
 modules, 12,515 lines, which compiles with zero diagnostics on `363b9e7` and emits 33 documents.
+
+That branch has since merged. Re-checked against `main` at `0.2.0`: still zero diagnostics,
+still 33 documents, and every one of the 33 is now *painted* rather than served as an empty
+container — the first paint landed after the measurement was taken and the target is what
+demonstrates it.
 
 Every figure quoted before that — 0%, 47.6%, 16.4%, 21.3%, 24.2% — was either a
 measurement of a commit that had since moved on, or a projection over a union of branches that
