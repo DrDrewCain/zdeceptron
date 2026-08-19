@@ -9,7 +9,9 @@
 > platform adapter, dev server and language server all exist and are tested. **`client`,
 > `server`, `durable` and `static` programs all build, and the server half executes**: two
 > browser windows move together over live sync, proven by
-> `crates/zdc-host/tests/two_windows.rs`. Two of the three gaps this note used to name have
+> `crates/zdc-host/tests/two_windows.rs`. **A page arrives drawn**: the build host renders the
+> view into the shell and the client adopts that tree rather than replacing it, so there is no
+> blank frame while the module loads. Two of the three gaps this note used to name have
 > closed: `build read`, `build list` and `build markdown` read the project directory inside the
 > compiler's own sandbox, and `examples/blog.zd` renders real markdown off disk into the bundle.
 > What is left is narrower and worth stating exactly: **only the compiler can make a `Markup`**,
@@ -120,16 +122,19 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**Over 2600 tests pass across 21 crates**, with 0 failures and 15 deliberate `#[ignore]`s — the
-surveys that print a measurement rather than gating on it, the browser tests CI runs with
-`--ignored` because they need a real browser, and the two that hold a known defect open: a `give` after a
+**Over 2900 tests pass across 21 crates**, with 0 failures and 25 deliberate `#[ignore]`s — the
+surveys that print a measurement rather than gating on it, the browser and mutation suites CI
+runs with `--ignored` in jobs of their own because one needs a real browser and the other
+sweeps several hundred mutants, and the two that hold a known defect open: a `give` after a
 pipeline run is emitted as unreachable code, and `Input` cannot bind a component's own
 `state` though a handler can write it. The full picture, with the evidence behind each row
 and a per-crate table CI compares against the tree, is in [`STATUS.md`](STATUS.md).
 
 The figure is written as a floor rather than an exact count, and that is deliberate: an exact
 one is a fact about the tree restated in prose, and it was wrong here for months — 2358
-against a tree of 2662, across 20 crates against 21. A floor is checked by
+against a tree of 2662, across 20 crates against 21. It has since been a floor twice over: the
+suite passed 2600 and then 2900 without this line needing an edit, which is the whole argument
+for writing it this way. A floor is checked by
 `the_readme_does_not_overstate_its_own_test_count` and stays true as the suite grows, so it
 rots in the safe direction only.
 
@@ -153,16 +158,21 @@ with a tail that reads like an ordinary summary.
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
 | Routing — declared routes, one bundle per URL | ✅ working |
-| Element vocabulary — 69 built-ins | ✅ working |
+| Element vocabulary — 76 built-ins | ✅ working |
 | Event payloads on handlers | ✅ working |
 | `static` placement, build-time evaluation, file emission | ✅ working |
-| Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
+| Standard library (prelude, 10 modules over 173 functions) | ✅ working |
 | FFI (`foreign`) — declared, resolved, typechecked, lowered | ✅ working |
 | Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
 | Markup — `Markup` type, `Prose` element, `build markdown` | ✅ working, ⬜ only the compiler can make one |
 | Reading files at build time — `build read`, `build list`, `build markdown` | ✅ working |
-| Source maps | ⬜ not started |
-| `record … unique` — identity keys for lists | ⬜ parsed, then refused: *"`unique` is not implemented past the parser yet (#2)"* |
+| Source maps — emitted beside every bundle, `//# sourceMappingURL` survives minification | ✅ working |
+| Minified output — `zdc build` and `zdc deploy` ship comments and whitespace stripped, no identifier renamed | ✅ working |
+| First paint — the build host renders the page into the shell, the client adopts it rather than rebuilding | ✅ working |
+| Wire format — a version on every request and stream, refused rather than guessed across a mismatch | ✅ working |
+| Scheduled work — `every "1h"` on a `server` cell, emitted as the target's own scheduler | ✅ working |
+| `zdc test` — `test` declarations checked at build time | ✅ working |
+| `record … unique` — identity keys for lists | ✅ working — `each` reconciles on the key, not the position |
 | Dialects | ⬜ not started, beyond the M1 enabling structure |
 
 ## Where it stops
@@ -216,7 +226,9 @@ The honest boundary, stated once so nothing below oversells:
   them is linear in the collection and there is no index. That is [decided rather than
   pending](docs/reference.md#querying-related-data), and there is no route to a database outside
   `durable` either: `request` is client-side and header-less by design.
-- **No source maps, no dialects, no `record … unique`.**
+- **No dialects.** Source maps and `record … unique` were on this line and have since been
+  built: a bundle ships a `.map` beside it, and a `unique` field makes `each` reconcile on the
+  row's identity rather than its position.
 
 All thirty-eight programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
@@ -385,7 +397,7 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 
 All thirty-eight are listed with what each one teaches in
 [`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.
-`sorting.test.zd` is a thirty-fifth file and is not a thirty-fifth
+`sorting.test.zd` is a thirty-ninth file and is not a thirty-ninth
 program: it declares no view of its own and exists to be run by `zdc test`.
 
 ### Every command
@@ -507,22 +519,24 @@ no Zed extension — `editors/README.md` has the argument.
 ## Building
 
 ```sh
-# 2200 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
-# Worth splitting — the benchmark suite dominates execution, at about seven
-# minutes of the total in one target.
-cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2135 passed, 2 ignored
-cargo test -p zdc-bench --no-fail-fast                      #   40 passed, 3 ignored
+# Nearly 3000 tests. Test execution is a few minutes; a cold compile dominates
+# the wall clock. Worth splitting — the benchmark suite dominates execution, at
+# about seven minutes of the total in one target.
+cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2917 passed, 19 ignored
+cargo test -p zdc-bench --no-fail-fast                      #   57 passed,  6 ignored
 
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-CI runs all three, plus eight scripted gates: every crate root carries `#![forbid(unsafe_code)]`;
-no wildcard match arm over a closed compiler enum; no test that cannot fail; no emitter that
-writes its own quotes around a placeholder; the editor grammar highlights no keyword the lexer
-rejects; advisory exceptions agree and are explained; `cargo deny`; and `cargo audit`. The last
-two of those and a `cargo-geiger` scan of the dependency graph are why the dependency list stays
-short.
+CI runs all three, plus ten scripted gates: every crate root carries `#![forbid(unsafe_code)]`;
+`unsafe` in the *dependency graph* stays under a ceiling; no wildcard match arm over a closed
+compiler enum; no test that cannot fail; no emitter that writes its own quotes around a
+placeholder; the editor grammar highlights no keyword the lexer rejects; no diagnostic exceeds
+the inline message budget; the installer parses under a POSIX shell; the crates print in an
+order `cargo publish` can follow; and advisory exceptions agree and are explained. `cargo deny`
+and `cargo audit` run alongside them, and those two plus a `cargo-geiger` scan of the dependency
+graph are why the dependency list stays short.
 
 Three of those gates exist because a bug got through: the vacuous-test check, the wildcard-arm
 check and the emitted-string check were each written after something they would have caught.
