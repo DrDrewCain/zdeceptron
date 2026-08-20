@@ -1455,7 +1455,9 @@ fn collect_view_ifs(nodes: &[HirNode], out: &mut Vec<(Span, Vec<HirNode>)>) {
                     }
                 }
             }
-            _ => {}
+            // No view subtree to walk: a handler is a listener, `children`
+            // is a hole the caller fills, and a scope holds bindings.
+            HirNode::Handler(_) | HirNode::Children(_) | HirNode::Scope(_) => {}
         }
     }
 }
@@ -1483,7 +1485,7 @@ fn without_branch(nodes: &mut [HirNode], span: Span) {
                     }
                 }
             }
-            _ => {}
+            HirNode::Handler(_) | HirNode::Children(_) | HirNode::Scope(_) => {}
         }
     }
 }

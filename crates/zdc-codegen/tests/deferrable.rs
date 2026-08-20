@@ -23,7 +23,16 @@ fn view_nodes(hir: &zdc_hir::Hir) -> &[zdc_hir::HirNode] {
 fn nodes_of(hir: &zdc_hir::Hir) -> Option<&[zdc_hir::HirNode]> {
     match &hir.defs[hir.view?].kind {
         zdc_hir::DefKind::View(view) => Some(&view.nodes),
-        _ => None,
+        // `hir.view` names a view, so this is unreachable — written out
+        // rather than waved past, because a new `DefKind` should be a
+        // compile error here and not a silent `None`.
+        zdc_hir::DefKind::Signal(_)
+        | zdc_hir::DefKind::Function(_)
+        | zdc_hir::DefKind::Record(_)
+        | zdc_hir::DefKind::Choice(_)
+        | zdc_hir::DefKind::Component(_)
+        | zdc_hir::DefKind::Foreign(_)
+        | zdc_hir::DefKind::Release(_) => None,
     }
 }
 
