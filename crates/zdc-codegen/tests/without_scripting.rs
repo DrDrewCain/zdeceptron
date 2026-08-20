@@ -32,6 +32,35 @@ fn says_it_needs_scripting(page: &str) -> bool {
     page.contains("<noscript>")
 }
 
+/// A program that asks for something over the network is still a program
+/// the build host can run. The request is `Loading` when the page is built
+/// — that is what a `Remote of T` starts as — so the reader is served the
+/// `Loading` arm, which is the arm the client shows too and then adopts.
+///
+/// **It shipped the empty container and the sentence until `flattened`
+/// kept an import's renames.** The emitted module imports
+/// `{ request as $request }`; a pass that dropped the whole line left
+/// `$request` undeclared, which is a `ReferenceError` at load, which the
+/// pass turns into `None`. Every program with a `request` or a server read
+/// emits exactly that shape, so not one of them had ever been painted —
+/// and each was telling its reader it needed JavaScript to appear, which
+/// is the claim this file exists to keep honest.
+#[test]
+fn a_program_that_asks_the_network_is_painted_in_its_loading_arm() {
+    let bundle = compile_example("examples/quote.zd");
+    let page = bundle.index_html.expect("this example emits a page");
+    let inside = painted(&page).expect("this example has a container");
+    assert!(
+        !inside.is_empty(),
+        "a `request` is `Loading` at build time, which is paintable:\n{page}"
+    );
+    assert!(
+        !says_it_needs_scripting(&page),
+        "the page was painted, so the fallback would be shown to a reader \
+         who is already reading it:\n{page}"
+    );
+}
+
 /// `gauge.zd` holds a `foreign`, which the build host has no copy of — so
 /// the prerender returns `None` and the container ships empty. That is the
 /// page the fallback exists for.

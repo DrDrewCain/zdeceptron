@@ -22,7 +22,7 @@
 //     value cannot leave its own parameter, so it cannot add a parameter,
 //     change the path, or reach the host.
 //  4. **A `Failed` message is composed from this file's own control flow.**
-//     `rpc.js` reads `body.error` out of a failed response, which is right
+//     `rpc.js` reads `body.error` out of a requestFailed response, which is right
 //     for a body it wrote and wrong for one it did not: a third party
 //     would otherwise choose text a program renders.
 
@@ -42,7 +42,7 @@ import { signal, effect } from './signal.js';
 // that makes no request at all.
 const REQUEST_LOADING = { tag: 'Loading', fields: [] };
 
-function ready(value) {
+function requestReady(value) {
   return { tag: 'Ready', fields: [value] };
 }
 
@@ -108,7 +108,7 @@ class RequestFailure extends Error {
   }
 }
 
-function codeOf(error) {
+function requestCodeOf(error) {
   if (error instanceof RequestFailure) return error.zdCode;
   const name = error && error.name;
   if (name === 'AbortError' || name === 'TimeoutError') return REQUEST_CODES.TIMEOUT;
@@ -120,24 +120,24 @@ function codeOf(error) {
  *
  * **The message is this file's sentence, not the host's.** A
  * `RequestFailure` carries text composed below from the destination and
- * the status line; anything else — a transport a host page replaced, a
+ * the status line; anything else — a requestTransport a host page replaced, a
  * `TypeError` from the platform — is reported as its `name` and no more.
  * `String(error.message)` is what `rpc.js` writes, and it is what would
  * let an answering host put its own prose on the page.
  */
-function failed(destination, error) {
+function requestFailed(destination, error) {
   const message =
     error instanceof RequestFailure
       ? error.message
       : `${destination} could not be reached (${(error && error.name) || 'error'})`;
   return {
     tag: 'Failed',
-    fields: [{ message, code: { tag: codeOf(error), fields: [] } }],
+    fields: [{ message, code: { tag: requestCodeOf(error), fields: [] } }],
   };
 }
 
 /** A cancellable deadline, or a no-op where the platform has no timers. */
-function startDeadline() {
+function startRequestDeadline() {
   const has = typeof AbortController === 'function' && typeof setTimeout === 'function';
   if (!has) return { signal: undefined, cancel: () => {}, expired: () => false };
   const controller = new AbortController();
@@ -154,15 +154,15 @@ function startDeadline() {
   };
 }
 
-let transport = defaultTransport;
+let requestTransport = defaultRequestTransport;
 
-/** Replace the transport. Used by tests, which answer without a network. */
+/** Replace the requestTransport. Used by tests, which answer without a network. */
 export function setRequestTransport(next) {
-  transport = next || defaultTransport;
+  requestTransport = next || defaultRequestTransport;
 }
 
-async function defaultTransport(url) {
-  const deadline = startDeadline();
+async function defaultRequestTransport(url) {
+  const deadline = startRequestDeadline();
   let response;
   try {
     response = await fetch(url, {
@@ -216,13 +216,13 @@ export function request(destination, pairs) {
     const mine = ++generation;
     write(REQUEST_LOADING);
     Promise.resolve()
-      .then(() => transport(url))
+      .then(() => requestTransport(url))
       .then(
         (text) => {
-          if (mine === generation) write(ready(text));
+          if (mine === generation) write(requestReady(text));
         },
         (error) => {
-          if (mine === generation) write(failed(destination, error));
+          if (mine === generation) write(requestFailed(destination, error));
         },
       );
   });

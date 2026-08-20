@@ -71,7 +71,7 @@ pub fn prerender(client_js: &str, linked: &[(&str, &str)]) -> Option<Prerendered
     for source in [zdc_runtime::PRERENDER_JS, zdc_runtime::DOM_SHIM_JS] {
         sandbox.load(&flattened(source)).ok()?;
     }
-    for (_, source) in linked {
+    for (_, source) in in_dependency_order(linked) {
         sandbox.load(&flattened(source)).ok()?;
     }
     sandbox.load(&flattened(client_js)).ok()?;
@@ -103,8 +103,97 @@ pub fn prerender(client_js: &str, linked: &[(&str, &str)]) -> Option<Prerendered
 fn flattened(source: &str) -> String {
     source
         .lines()
-        .filter(|line| !line.trim_start().starts_with("import "))
-        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .map(|line| {
+            // An import is dropped, because every module is already in this
+            // one scope — except for the names it renames. `import { request
+            // as $request }` binds `$request`, and dropping the line leaves
+            // the emitted code calling a name nothing declares. That is a
+            // `ReferenceError` at load, which `prerender` turns into `None`,
+            // which is a first paint silently not taken: every program with a
+            // `request` or a server read emits exactly this shape.
+            if line.trim_start().starts_with("import ") {
+                return aliases_of(line);
+            }
+            line.strip_prefix("export ").unwrap_or(line).to_string()
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `linked`, reordered so a module's imports load before it.
+///
+/// The parameter above says "in dependency order" and the caller passes
+/// alphabetical — which is the order the bundle writes to disk, and there
+/// it does not matter, because a browser is given the graph and resolves
+/// it. Here every module is one script in one scope, so a name has to
+/// exist by the time the line binding it runs. `store.js` binds
+/// `decode as decodeValue`, `wire.js` sorts after `store.js`, and the
+/// binding was reading a name nothing had declared yet.
+///
+/// Depth-first, and a module already placed is skipped, so a cycle stops
+/// rather than spins. A cycle cannot be ordered at all and this pass is
+/// allowed to fail — leaving it to fail at load is better than inventing
+/// an order for it here.
+fn in_dependency_order<'a>(linked: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut placed: Vec<(&str, &str)> = Vec::with_capacity(linked.len());
+    let mut seen: Vec<&str> = Vec::with_capacity(linked.len());
+    for (name, _) in linked {
+        place(name, linked, &mut placed, &mut seen);
+    }
+    placed
+}
+
+/// One module and everything it imports, deepest first.
+fn place<'a>(
+    name: &'a str,
+    linked: &[(&'a str, &'a str)],
+    placed: &mut Vec<(&'a str, &'a str)>,
+    seen: &mut Vec<&'a str>,
+) {
+    if seen.contains(&name) {
+        return;
+    }
+    seen.push(name);
+    let Some((_, source)) = linked.iter().find(|(each, _)| *each == name) else {
+        return;
+    };
+    for line in source.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("import ") else {
+            continue;
+        };
+        // `from './wire.js'` — the only import shape a runtime module
+        // writes, and `MODULES` names them all with a `runtime/` prefix.
+        let Some(open) = rest.find("'./") else {
+            continue;
+        };
+        let after = &rest[open + 3..];
+        let Some(close) = after.find('\'') else {
+            continue;
+        };
+        let needed = format!("runtime/{}", &after[..close]);
+        if let Some((each, _)) = linked.iter().find(|(each, _)| *each == needed) {
+            place(each, linked, placed, seen);
+        }
+    }
+    placed.push((name, source));
+}
+
+/// The `const` lines an import's renames need, and nothing for the rest.
+///
+/// Only `{ a as b }` needs one. A plain `{ a }` binds the name the module
+/// already declares, and a scope holding both would be a redeclaration
+/// rather than a repair.
+fn aliases_of(line: &str) -> String {
+    let Some(open) = line.find('{') else {
+        return String::new();
+    };
+    let Some(close) = line[open..].find('}') else {
+        return String::new();
+    };
+    line[open + 1..open + close]
+        .split(',')
+        .filter_map(|clause| clause.split_once(" as "))
+        .map(|(from, to)| format!("const {} = {};", to.trim(), from.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
