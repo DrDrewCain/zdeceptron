@@ -82,6 +82,7 @@ use crate::stmt::Statements;
 use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
+pub use crate::analysis::{deferrable_regions, DeferrableRegion};
 pub use crate::build::{BuildModule, Claim};
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
 // Outside the feature on purpose: a `Broken` is what a *report* is made
