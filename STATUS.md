@@ -432,7 +432,7 @@ for it to be kept in.
 
 | Construct | Status, verified on this branch by running `zdc check` |
 |---|---|
-| `unique` in a record field | **Parses, and is refused after it.** The probe now reports *"`Todo` declares `id` as its identity, and `unique` is not implemented past the parser yet (#2). Removing the word compiles, and reconciles by position."* — so the parser rule has landed and the type table and the emitter have not. This is still why every list reconciles positionally; see `BENCHMARKS.md`. |
+| `unique` in a record field | **Landed, through the emitter.** The refusal this row used to quote is gone: `examples/todo.zd` compiles and emits a key function, `(item) => item.id`, into `eachInto`. A record that declares no `unique` still reconciles by position, which is the default rather than the gap it was. |
 | `readMarkdown "content/blog"` — a call with a bare argument | **Refused.** Every call is written `f with a, b`. This used to be what stopped `blog.zd`; the file is now written in the `build` capability form and builds. |
 
 **`Row item.name` — a leading argument to `Row`/`Column` — now works.** It was listed here as
@@ -458,7 +458,11 @@ the one thing standing between three examples and a successful build; those thre
   `zdc dev` embeds it, because the `.zd` sits outside the served root and devtools has nothing
   to fetch.
 - **No dialects.** Only `english`. The enabling structure is in place; no second surface exists.
-- **No `record … unique`.** Every list reconciles positionally.
+- **~~No `record … unique`.~~ Landed.** A `unique` field is the row's identity and `each`
+  reconciles on it: `examples/todo.zd` emits
+  `eachInto($n7, $n7.nextSibling, visible, (item) => item.id, …)`, so a removal from the middle
+  moves the rows after it rather than rewriting them. A list whose record declares no `unique`
+  still reconciles positionally, which is the default and not a gap.
 - **~~No build-time file reading.~~ Landed.** `build read`, `build list` and `build markdown`
   all exist, run in the compiler's own sandbox over the project directory, and are what
   `writing.zd` and `blog.zd` are built from. `crates/zdc-hir/src/sandbox.rs` bounds what a
@@ -649,6 +653,23 @@ this file against an older copy can see which way each one went.
 - **Transactional durable writes.** **Landed.** `runtime/rpc.js` posts a batch to the reserved
   `~atomic` endpoint and the host commits every write of one handler as a single store
   transaction, retried on conflict and refused rather than half-applied.
+- **Minified output.** **Landed.** `zdc build` and `zdc deploy` strip comments and redundant
+  whitespace from JavaScript and CSS and nothing else — no identifier renamed, no expression
+  rewritten, no two tokens joined. `examples/counter.zd` ships 10,384 bytes with 0 comment
+  lines, and the `//# sourceMappingURL` pragma survives because a pragma is not prose.
+- **The first paint.** **Landed.** The build host runs the emitted module against a shimmed DOM
+  and writes the result into the shell, and the client *adopts* that tree rather than mounting
+  its own over it — `runtime/adopt.js`, plus anchors a walk can find. It is best-effort by
+  design: a program the build host cannot run still ships, and ships the `noscript` sentence
+  instead. All 33 documents of the milestone-7 target are painted.
+- **A version on the wire.** **Landed.** Every request carries `zd-wire` and every stream a
+  `wire=` parameter, and a server reading a version it does not speak refuses rather than
+  guessing at the bytes. The format is at 1; the number moves when the bytes do, not when the
+  compiler's version does.
+- **`Dialog` and `FileInput`.** **Landed**, in a vocabulary now 76 built-ins wide. `Dialog` is
+  a modal with a focus trap that writes its signal back on close, so the program and the page
+  cannot disagree about whether it is showing. `FileInput` yields an `Option of Text` — the
+  *name* of the file and nothing else, because no file is ever a value here.
 - **The unlabelled failure channel.** Not previously listed, and worth naming because it is the
   newest: a `Failed` payload now joins over everything the endpoint *reads*, not only over its
   parameters. Its `code` field is the exception, and it is public by construction — the client
