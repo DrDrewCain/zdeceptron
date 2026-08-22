@@ -218,7 +218,7 @@ total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 1005 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-codegen` | 1006 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 235 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
 | `zdc-graph` | 231 | Including the information-flow negative suite and the failure channel. |

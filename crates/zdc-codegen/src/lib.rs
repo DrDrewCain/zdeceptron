@@ -712,6 +712,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
         manifest_json: manifest_json(
             inputs.hir,
+            Some("client.js"),
             &emitted.names,
             &emitted.functions,
             &durable,
@@ -943,6 +944,9 @@ pub fn compile_site(
         immutable,
         manifest_json: manifest_json(
             hir,
+            // A routed build's entries are per page, and `routes.json`
+            // lists them.
+            None,
             &names,
             &functions,
             &durable,
@@ -2767,8 +2771,27 @@ pub struct HandlerWrites {
 /// The manifest is client-readable, so it may carry endpoint names, input
 /// orders, durable keys and cadence rules — never an initializer and never
 /// an `environment` key name (spec §16.3.12, assertion C).
+// Eight, and each is a different fact about the program the manifest
+// states. A struct here would be a parameter list with a name on it: it
+// has one caller shape, two call sites, and nothing else would ever hold
+// one. `view.rs` and `split.rs` take the same allowance for the same
+// reason.
+#[allow(clippy::too_many_arguments)]
 fn manifest_json(
     hir: &Hir,
+    // The module a reader of this manifest should load, or `None` where
+    // there is not one to name.
+    //
+    // A routed build has no single entry: it writes `pages/<slug>.js` per
+    // URL and `routes.json` names them. Saying `client.js` there named a
+    // file the build does not write (#369), which a consumer finds by
+    // fetching it and getting the 404 page.
+    //
+    // `null` rather than dropping the key. An absent field reads as "this
+    // compiler is too old to say", which is the wrong answer and the one
+    // a reader cannot distinguish from the right one; `null` says there
+    // is no entry, which is the fact.
+    entry: Option<&str>,
     names: &Names,
     functions: &[ServerFunction],
     durable: &[String],
@@ -2890,9 +2913,10 @@ fn manifest_json(
     // file that describes the program rather than any one document of it,
     // and it is machine-readable, which a comment is not (#398).
     format!(
-        "{{\"zdc\":{},\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\
+        "{{\"zdc\":{},\"entry\":{},\"functions\":[{}],\"durable\":[{}],\
          \"transactions\":[{}],\"origins\":[{}],\"connect\":[{}],\"signals\":{{{}}}}}\n",
         js::json_string(env!("CARGO_PKG_VERSION")),
+        entry.map_or_else(|| "null".to_string(), |e| js::json_string(e).to_string()),
         emitted.join(","),
         durable.join(","),
         transactions.join(","),
