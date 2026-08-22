@@ -190,6 +190,36 @@ view
     );
 }
 
+/// **The manifest says which compiler wrote the bundle.**
+///
+/// Nothing in a shipped bundle said so. The emitted module opens with a
+/// provenance line, and `zdc build` minifies (#135) — which strips prose
+/// by design, since the surviving-comment exception is for `//#` and a
+/// provenance line is not a pragma. So the answer moved to the file that
+/// describes the program rather than any one document of it (#398).
+///
+/// Held to `CARGO_PKG_VERSION` rather than to a literal, because a literal
+/// is the thing this repository keeps finding out of date: the number has
+/// to move when the workspace's does, and a test naming `0.2.0` would want
+/// the same hand-edit `documented_counts` was just relieved of.
+#[test]
+fn the_manifest_says_which_compiler_wrote_it() {
+    let bundle = compile_source(
+        "state count is client Whole starting 0
+
+view
+    Column
+        Text (text of count)
+",
+    );
+    let stated = format!("\"zdc\":\"{}\"", env!("CARGO_PKG_VERSION"));
+    assert!(
+        bundle.manifest_json.contains(&stated),
+        "the manifest should carry {stated}, and holds:\n{}",
+        bundle.manifest_json
+    );
+}
+
 #[test]
 fn the_manifest_records_which_shape_each_endpoint_takes() {
     // A caller that guesses wrong sends an array to a destructured object

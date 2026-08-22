@@ -2877,9 +2877,22 @@ fn manifest_json(
         .map(|origin| js::json_string(origin).to_string())
         .collect();
 
+    // **Which compiler wrote this.** Nothing in a shipped bundle said so,
+    // and it is the first question worth asking of a deployment behaving
+    // unlike the source tree it came from. The emitted module opens with a
+    // provenance line — `// zdc 0.2.0 · app.zd · generated, do not edit` —
+    // and `zdc build` minifies (#135), which strips prose by design: the
+    // surviving-comment exception is for `//#`, and a provenance line is
+    // not a pragma.
+    //
+    // So the manifest carries it rather than the minifier growing a second
+    // exception. It costs no byte a browser downloads, it is already the
+    // file that describes the program rather than any one document of it,
+    // and it is machine-readable, which a comment is not (#398).
     format!(
-        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
-         \"origins\":[{}],\"connect\":[{}],\"signals\":{{{}}}}}\n",
+        "{{\"zdc\":{},\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\
+         \"transactions\":[{}],\"origins\":[{}],\"connect\":[{}],\"signals\":{{{}}}}}\n",
+        js::json_string(env!("CARGO_PKG_VERSION")),
         emitted.join(","),
         durable.join(","),
         transactions.join(","),
