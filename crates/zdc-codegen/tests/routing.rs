@@ -619,3 +619,31 @@ fn an_unrouted_program_still_writes_one_stylesheet_with_the_base_inside_it() {
         "and links no other:\n{document}"
     );
 }
+
+/// **A routed build names no entry, because it has none.**
+///
+/// The manifest said `client.js` for every build, and a routed one does
+/// not write that file: its entries are `pages/<slug>.js`, one per URL,
+/// and `routes.json` names them. A consumer following the manifest found
+/// out by fetching a 404 (#369).
+///
+/// `null` rather than an absent key. A missing field reads as "this
+/// compiler is too old to say", which is a different claim from "there is
+/// no entry" and one a reader cannot tell apart from it.
+#[test]
+fn a_routed_manifest_names_no_entry_and_an_unrouted_one_does() {
+    let site = site_example();
+    assert!(
+        site.manifest_json.contains(r#""entry":null"#),
+        "a routed build has no single entry to name:\n{}",
+        site.manifest_json
+    );
+
+    // The other half, so this cannot pass by the field having vanished.
+    let page = build(&support::repository_path("examples/page.zd"));
+    assert!(
+        page.manifest_json.contains(r#""entry":"client.js""#),
+        "an unrouted build writes `client.js` and should still say so:\n{}",
+        page.manifest_json
+    );
+}
