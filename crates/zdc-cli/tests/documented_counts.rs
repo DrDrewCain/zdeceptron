@@ -195,8 +195,70 @@ fn documented_test_counts() -> Vec<(String, usize)> {
 /// leaves the file disagreeing with itself. This is the fix it asked for
 /// instead: a measurement rather than a recount, so the class closes and
 /// not the instance.
+/// Rewrite STATUS.md's per-crate counts from the tree.
+///
+/// The guarantee this file makes is right — *a number nobody checks is a
+/// claim nobody checks* — and until now the numbers were hand-typed, so
+/// every branch that added a test went red until somebody edited a table
+/// by hand. #343 counted the cost: four branches whose only content was
+/// that edit, and nine of twelve red on this one gate in a day.
+///
+/// So the same treatment `BENCHMARKS.md` gets. The gate below still fails
+/// on drift; this is how you fix it without counting:
+///
+/// ```sh
+/// ZDC_BLESS=1 cargo test -p zdc-cli --test documented_counts
+/// ```
+///
+/// It writes only the number in a row it already found. A row for a crate
+/// that does not exist, or a crate with no row, is still a failure the
+/// gate reports rather than something blessing invents — a table that
+/// silently grew a row would be a table nobody wrote.
+fn bless(measured: &[(String, usize)]) {
+    let path = repository().join("STATUS.md");
+    let text = std::fs::read_to_string(&path).expect("STATUS.md");
+    let mut out = String::with_capacity(text.len());
+
+    for line in text.lines() {
+        let mut written = line.to_string();
+        if let Some((name, _)) = row_of(line) {
+            if let Some((_, count)) = measured.iter().find(|(each, _)| *each == name) {
+                let mut cells: Vec<&str> = line.split('|').collect();
+                // `| `name` | 123 | note |` — the count is the third cell,
+                // after the empty one a leading pipe makes.
+                if cells.len() > 3 {
+                    let replacement = format!(" {count} ");
+                    cells[2] = &replacement;
+                    written = cells.join("|");
+                }
+            }
+        }
+        out.push_str(&written);
+        out.push('\n');
+    }
+
+    std::fs::write(&path, out).expect("writing STATUS.md");
+    eprintln!("blessed STATUS.md from the tree");
+}
+
+/// The crate and count a per-crate row names, if the line is one.
+fn row_of(line: &str) -> Option<(String, usize)> {
+    let mut cells = line.split('|');
+    cells.next()?;
+    let name = cells.next()?.trim().trim_matches('`');
+    let count = cells.next()?.trim().parse::<usize>().ok()?;
+    name.starts_with("zdc-").then(|| (name.to_string(), count))
+}
+
 #[test]
 fn the_per_crate_test_table_matches_the_crates() {
+    if std::env::var("ZDC_BLESS").is_ok() {
+        let measured: Vec<(String, usize)> = documented_test_counts()
+            .iter()
+            .map(|(name, _)| (name.clone(), declared_tests(name)))
+            .collect();
+        bless(&measured);
+    }
     let documented = documented_test_counts();
 
     // Non-vacuity. A parser that matched no rows would report every count
