@@ -984,8 +984,15 @@ fn ranges(analysis: &Analysis, sites: &[zdc_lexer::Span]) -> Vec<Range> {
 /// encoding is relative to the first token *returned*, which is what the
 /// protocol asks for in both cases.
 fn semantic_tokens(analysis: &Analysis, from: u32, to: u32) -> Vec<SemanticToken> {
+    // `as_chunks` rather than `chunks_exact`, so the five is in the type and
+    // `five` is a `&[u32; 5]` — the indexing below cannot go out of range,
+    // and a sixth field added to the protocol's tuple is a compile error
+    // here rather than a silent misread. `.0` drops the remainder, which
+    // `encode` does not produce: it writes five words per token.
     crate::tokens::encode(&crate::tokens::highlights_within(analysis, from, to))
-        .chunks_exact(5)
+        .as_chunks::<5>()
+        .0
+        .iter()
         .map(|five| SemanticToken {
             delta_line: five[0],
             delta_start: five[1],
