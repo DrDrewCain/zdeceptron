@@ -28,6 +28,7 @@ use zdc_hir::{
     HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
     Res,
 };
+use zdc_lexer::Span;
 use zdc_types::TypeTable;
 
 use crate::pages::Bindings;
@@ -1339,6 +1340,152 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         HirExprKind::MapInside { source, to, .. } => {
             expr_references(hir, *source, out);
             expr_references(hir, *to, out);
+        }
+    }
+}
+
+/// Every `view`-position `if` in a node tree, with the definitions its
+/// branches reach and nothing else does.
+///
+/// # Why this exists
+///
+/// A routed build emits one module per page, and every module holds
+/// everything its page can *reach* (#401). That is the right answer to the
+/// question the emitter asks, and the wrong answer to the question a
+/// reader's connection asks: `~/zdc-portfolio` ships 33 route bundles of
+/// about 543 KB each, and building it with the terminal removed from the
+/// shell gives 102 KB — so **81% of every bundle is behind one `if`** that
+/// almost no page render ever takes.
+///
+/// The boundary is already in the program. `ifInto` does not build a
+/// branch until its condition first goes true, so the moment a branch is
+/// first needed is a moment the runtime already observes; what it does not
+/// do is wait for the branch's *code*.
+///
+/// # What "exclusive" means, and why it is subtraction
+///
+/// A definition is a candidate when the branch reaches it and the rest of
+/// the document does not. Subtraction rather than a separate walk, because
+/// a function used both inside and outside a branch must stay eager — and
+/// which of the two a definition is cannot be decided by looking at the
+/// branch alone.
+///
+/// The `otherwise` arm is walked as part of the *eager* side rather than as
+/// a second candidate region. Both arms of one `if` are never live at once,
+/// but the condition can flip back, so an else-branch is reachable from a
+/// page that has already loaded — treating it as deferrable would trade one
+/// fetch for two.
+///
+/// # What this does not do
+///
+/// It names candidates. It does not emit anything, and a candidate is not
+/// yet a chunk: a branch closure captures its enclosing templates and
+/// signals lexically, so moving one needs an explicit parameter list rather
+/// than a file move. That is the rest of #401.
+pub fn deferrable_regions(hir: &Hir, roots: &[HirNode]) -> Vec<DeferrableRegion> {
+    let mut branches: Vec<(Span, Vec<HirNode>)> = Vec::new();
+    collect_view_ifs(roots, &mut branches);
+    if branches.is_empty() {
+        return Vec::new();
+    }
+
+    branches
+        .into_iter()
+        .map(|(span, then)| {
+            // What the whole document reaches with this branch's `then`
+            // taken out, which is what "the rest of the document" means.
+            let mut eager_roots = roots.to_vec();
+            without_branch(&mut eager_roots, span);
+            let eager = closure_over(hir, &eager_roots);
+            let inside = closure_over(hir, &then);
+            DeferrableRegion {
+                span,
+                exclusive: inside.difference(&eager).copied().collect(),
+                reached: inside,
+            }
+        })
+        .collect()
+}
+
+/// One `view`-position `if`, and what deferring it would move.
+#[derive(Debug, Clone)]
+pub struct DeferrableRegion {
+    /// The `if` itself, so a caller can find the node again.
+    pub span: Span,
+    /// Everything the taken branch reaches.
+    pub reached: BTreeSet<DefId>,
+    /// What it reaches that the rest of the document does not.
+    pub exclusive: BTreeSet<DefId>,
+}
+
+/// The client definitions a node slice reaches, transitively.
+fn closure_over(hir: &Hir, roots: &[HirNode]) -> BTreeSet<DefId> {
+    let mut queue: Vec<DefId> = Vec::new();
+    node_references(hir, roots, &mut queue);
+    let mut seen: BTreeSet<DefId> = BTreeSet::new();
+    while let Some(def) = queue.pop() {
+        if !seen.insert(def) {
+            continue;
+        }
+        let mut next: Vec<DefId> = Vec::new();
+        references_of(hir, &hir.defs[def], &mut next);
+        queue.extend(next);
+    }
+    seen
+}
+
+/// Every `if` node in the tree, outermost first.
+///
+/// Outermost only: a nested `if` inside a deferred branch travels with it,
+/// and offering it separately would name a candidate whose enclosing chunk
+/// already carries it.
+fn collect_view_ifs(nodes: &[HirNode], out: &mut Vec<(Span, Vec<HirNode>)>) {
+    for node in nodes {
+        match node {
+            HirNode::If(branch) => out.push((branch.span, branch.then.clone())),
+            HirNode::Element(element) => collect_view_ifs(&element.children, out),
+            HirNode::Each(each) => collect_view_ifs(&each.body, out),
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Nodes(nodes) => collect_view_ifs(nodes, out),
+                        HirNodeArmBody::Show(element) => {
+                            collect_view_ifs(&element.children, out);
+                        }
+                    }
+                }
+            }
+            // No view subtree to walk: a handler is a listener, `children`
+            // is a hole the caller fills, and a scope holds bindings.
+            HirNode::Handler(_) | HirNode::Children(_) | HirNode::Scope(_) => {}
+        }
+    }
+}
+
+/// The tree with one `if`'s taken branch emptied, found by span.
+fn without_branch(nodes: &mut [HirNode], span: Span) {
+    for node in nodes.iter_mut() {
+        match node {
+            HirNode::If(branch) if branch.span == span => branch.then.clear(),
+            HirNode::If(branch) => {
+                without_branch(&mut branch.then, span);
+                if let Some(otherwise) = branch.otherwise.as_mut() {
+                    without_branch(otherwise, span);
+                }
+            }
+            HirNode::Element(element) => without_branch(&mut element.children, span),
+            HirNode::Each(each) => without_branch(&mut each.body, span),
+            HirNode::When(when) => {
+                for arm in when.arms.iter_mut() {
+                    match &mut arm.body {
+                        HirNodeArmBody::Nodes(nodes) => without_branch(nodes, span),
+                        HirNodeArmBody::Show(element) => {
+                            without_branch(&mut element.children, span);
+                        }
+                    }
+                }
+            }
+            HirNode::Handler(_) | HirNode::Children(_) | HirNode::Scope(_) => {}
         }
     }
 }
