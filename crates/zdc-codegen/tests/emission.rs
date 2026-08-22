@@ -1279,10 +1279,15 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
 #[test]
 fn the_manifest_records_placements_and_no_initializers() {
     let bundle = compile_example("examples/counter.zd");
-    assert_eq!(
-        bundle.manifest_json.trim(),
-        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"origins":[],"connect":[],"signals":{"count":"client","doubled":"client"}}"#
+    // `zdc` first, and built from `CARGO_PKG_VERSION` rather than written
+    // out: this constant pins the manifest byte for byte, and a literal
+    // version here would need a hand-edit at every release — which is the
+    // shape #343 has just finished removing from `STATUS.md`.
+    let expected = format!(
+        r#"{{"zdc":"{}","entry":"client.js","functions":[],"durable":[],"transactions":[],"origins":[],"connect":[],"signals":{{"count":"client","doubled":"client"}}}}"#,
+        env!("CARGO_PKG_VERSION")
     );
+    assert_eq!(bundle.manifest_json.trim(), expected);
 }
 
 /// Every line of a source that calls the platform's error channel.

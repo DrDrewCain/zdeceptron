@@ -323,9 +323,9 @@ The per-file columns are what the compiler emitted. **`shipped`** is the same bu
 
 | Program | client.js | boot.js | styles.css | index.html | manifest.json | emitted | shipped | saved |
 |---|---|---|---|---|---|---|---|---|
-| `examples/hello.zd` | 737 | 208 | 3641 | 748 | 122 | 5456 | 2652 | 2804 |
-| `examples/counter.zd` | 1075 | 208 | 3641 | 846 | 142 | 5912 | 3096 | 2816 |
-| `crates/zdc-bench/bench/row.zd` | 942 | 208 | 3641 | 740 | 163 | 5694 | 2872 | 2822 |
+| `examples/hello.zd` | 737 | 208 | 3641 | 748 | 136 | 5470 | 2666 | 2804 |
+| `examples/counter.zd` | 1075 | 208 | 3641 | 846 | 156 | 5926 | 3110 | 2816 |
+| `crates/zdc-bench/bench/row.zd` | 942 | 208 | 3641 | 740 | 177 | 5708 | 2886 | 2822 |
 
 **`shipped`** is the file a reader downloads — `// $dev` assertions stripped (#140), then minified (#135). **`source`** is the file a contributor opens. The gap between them is how much of this runtime is prose.
 
