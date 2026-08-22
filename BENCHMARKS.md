@@ -332,11 +332,11 @@ The per-file columns are what the compiler emitted. **`shipped`** is the same bu
 | Runtime file | shipped | source |
 |---|---|---|
 | `runtime/signal.js` | 2647 | 8430 |
-| `runtime/dom.js` | 3907 | 10312 |
+| `runtime/dom.js` | 3935 | 10340 |
 | `runtime/foreign.js (a gives-view foreign only)` | 2541 | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 408 | 2686 |
-| `runtime/list.js (a program with an each only)` | 2946 | 13094 |
-| `runtime/branch.js (a program with a when or an if only)` | 1951 | 7243 |
+| `runtime/list.js (a program with an each only)` | 2952 | 13100 |
+| `runtime/branch.js (a program with a when or an if only)` | 1969 | 7261 |
 | `runtime/adopt.js (a view with a hole in it only)` | 912 | 5892 |
 | `runtime/base.css` | 1088 | 3641 |
 | `runtime/elements.js (direct emission only)` | 10643 | 29151 |
