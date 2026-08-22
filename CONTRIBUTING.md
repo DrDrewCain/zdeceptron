@@ -262,8 +262,22 @@ the prose to match what you think it now does.
 Remaining work lives in the issue tracker, indexed by
 [#35](https://github.com/DrDrewCain/zdeceptron/issues/35), not in `ROADMAP.md`
 prose. Some issues are labelled `open-decision`; several of those restate
-questions the spec has already settled, so it is worth grepping the spec for
-`DECIDED` or `WITHDRAWN` before designing against one.
+questions that have already been settled, so it is worth looking before
+designing against one.
+
+**Where a settled decision is written down, and the honest shape of that.**
+[`docs/reference.md`](docs/reference.md) marks two of them inline —
+`grep -n 'DECIDED\|WITHDRAWN' docs/reference.md` finds them — and that is
+the whole of what a clone contains. The rest are scattered by subject: a
+rule about integrity is argued in `zdc-graph/src/integrity.rs`, one about
+the wire in `runtime/wire.js`, one about dependencies in `CONTRIBUTING.md`
+itself, and several only in a pull request body or an issue comment.
+
+This section used to send you to grep "the spec", which reads as a promise
+that grepping it finds them all. It does not, and #348 is the open question
+of where they should live — a preference for the owner to settle rather than
+a defect. Until it is settled: grep the reference, then the crate that owns
+the rule, then the issue tracker.
 
 A good bug report is a `.zd` program, what you expected, and what happened.
 The program is the important part — it becomes the regression test.
