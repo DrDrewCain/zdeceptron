@@ -19,7 +19,7 @@ import { signal, effect, batch, owned, onCleanup } from './signal.js';
 import { anchors } from './dom.js';
 
 /** A value that may be a signal getter or a constant. */
-function read(value) {
+function readRow(value) {
   return typeof value === 'function' ? value() : value;
 }
 
@@ -125,7 +125,7 @@ export function eachInto(start, end, listGetter, keyOf, render, roots) {
     // program built with `append` is an iterable chain until something
     // asks it to be an array. Iterating it is what asks. Pass 1 walks the
     // whole list anyway, so this costs no order of growth.
-    const items = [...(read(listGetter) ?? [])];
+    const items = [...(readRow(listGetter) ?? [])];
     const parent = end.parentNode;
 
     batch(() => {

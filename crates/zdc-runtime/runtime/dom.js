@@ -12,7 +12,7 @@
 import { effect, batch } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
-function read(value) {
+function readNode(value) {
   return typeof value === 'function' ? value() : value;
 }
 
@@ -33,7 +33,7 @@ export function el(tag, props = {}, children = [], ns) {
     } else if (name === 'style' && typeof value === 'object') {
       for (const [prop, v] of Object.entries(value)) {
         effect(() => {
-          node.style.setProperty(prop, String(read(v)));
+          node.style.setProperty(prop, String(readNode(v)));
         });
       }
     } else if (typeof value === 'function') {
@@ -84,7 +84,7 @@ function appendChildren(parent, children) {
 export function text(getter) {
   const node = document.createTextNode('');
   effect(() => {
-    const value = read(getter);
+    const value = readNode(getter);
     node.nodeValue = value === null || value === undefined ? '' : String(value);
   });
   return node;
@@ -152,7 +152,7 @@ export function anchors() {
  */
 export function bindText(node, getter) {
   effect(() => {
-    const value = read(getter);
+    const value = readNode(getter);
     const next = value === null || value === undefined ? '' : String(value);
     if (node.nodeValue !== next) node.nodeValue = next;
   });
@@ -200,13 +200,13 @@ export function safeUrl(value) {
 
 /** Bind an existing element's attribute to a getter. */
 export function bindAttr(node, name, getter) {
-  effect(() => setAttribute(node, name, read(getter)));
+  effect(() => setAttribute(node, name, readNode(getter)));
 }
 
 /** Bind one CSS property of an existing element to a getter. */
 export function bindStyle(node, property, getter) {
   effect(() => {
-    node.style.setProperty(property, String(read(getter)));
+    node.style.setProperty(property, String(readNode(getter)));
   });
 }
 
@@ -237,7 +237,7 @@ export function on(node, event, handler) {
  */
 export function dynamicInto(start, end, getter) {
   effect(() => {
-    const value = read(getter);
+    const value = readNode(getter);
     clearBetween(start, end);
     const rendered = value instanceof Node ? value : document.createTextNode(String(value ?? ''));
     end.parentNode.insertBefore(rendered, end);

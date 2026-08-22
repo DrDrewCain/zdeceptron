@@ -21,7 +21,7 @@ import { signal, effect, owned, onCleanup } from './signal.js';
 import { anchors, clearBetween } from './dom.js';
 
 /** A value that may be a signal getter or a constant. */
-function read(value) {
+function readBranch(value) {
   return typeof value === 'function' ? value() : value;
 }
 
@@ -60,7 +60,7 @@ export function whenInto(start, end, getter, arms) {
   onCleanup(() => disposeArm && disposeArm());
 
   effect(() => {
-    const value = read(getter);
+    const value = readBranch(getter);
     setFields(value.fields ?? []);
     if (value.tag === currentTag) return;
 
@@ -133,7 +133,7 @@ export function ifInto(start, end, condition, render, otherwise) {
   onCleanup(() => disposeBranch && disposeBranch());
 
   effect(() => {
-    const taken = Boolean(read(condition));
+    const taken = Boolean(readBranch(condition));
     if (taken === current) return;
     current = taken;
 
