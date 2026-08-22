@@ -364,27 +364,15 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
     ),
     (
         "runtime/branch.js::equal-to-unequal",
-        3,
+        2,
         "two different things. Two are the adoption comparison, once in \
          `whenInto` and once in `ifInto`: `start.nodeValue === mark` is what \
          decides whether the served region is claimed or dropped, and only a \
          prerendered document reaches it. The suites that serve one are \
          `zdc-cli/tests/browser.rs` and the prerender tests, both a crate \
-         away. The third is inside `read` and is not measurable here at all — \
-         see the entry below",
-    ),
-    (
-        "runtime/branch.js::unreached-function",
-        1,
-        "`read`, and this one is a limit of the harness rather than of the \
-         suites: replacing its body with a throw fails three cases in \
-         `--test render`. `dom.js`, `branch.js` and `list.js` each declare a \
-         byte-identical top-level `read`, kept separate so a program links \
-         neither module it does not use. `report_of` flattens every module a \
-         suite links into one scope, the last declaration hoists over the \
-         rest, and a mutant applied to this copy is undone before it runs. \
-         Harmless while the three agree; #394 is why that is not something to \
-         rely on",
+         away. There was a third, inside a `read` this file could not deliver \
+         a mutant to, and #394 closed that by giving each module's copy its \
+         own name",
     ),
     (
         "runtime/clock.js::and-to-or",
