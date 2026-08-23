@@ -129,6 +129,7 @@ const EMITTED: &[&str] = &[
 ];
 
 /// Every JavaScript identifier the emission uses for a source-level name.
+#[derive(Clone)]
 pub struct Names {
     defs: HashMap<DefId, String>,
     setters: HashMap<DefId, String>,

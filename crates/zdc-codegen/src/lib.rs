@@ -673,7 +673,10 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         // comparison in `mark_current_page` a fact rather than a guess.
         None,
         &shared,
-    )?;
+        // An unrouted program emits one document, so its table has nobody
+        // to agree with and is settled where it is used.
+        None,
+        )?;
 
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
@@ -795,6 +798,7 @@ pub fn compile_site(
     // fixpoint per page would make it cubic, which is the one thing that
     // would bite at a realistic page count.
     let shared = Shared::new(hir, inputs.table);
+    let program_names = whole_program_names(inputs, &shared);
     let mut pages = Vec::with_capacity(site.pages.len());
     let mut errors = Vec::new();
     let mut index = Vec::new();
@@ -829,6 +833,7 @@ pub fn compile_site(
             Layout::Page,
             Some(&page.url),
             &shared,
+            Some(&program_names),
         ) {
             Ok(emitted) => {
                 if page.variant.is_none() {
@@ -1106,6 +1111,24 @@ fn page_title(options: &Options, metadata: &Metadata, url: &str) -> String {
     format!("{base} · {url}")
 }
 
+/// The name table a routed program's documents all read from.
+///
+/// Built from the whole program — [`Analysis::whole`] and the split's
+/// client root, the same pair an unrouted build uses — so it does not
+/// depend on which page asked. That is what lets one definition be
+/// emitted once and imported by thirty-three documents: they agree on
+/// what it is called because none of them chose the name.
+fn whole_program_names(inputs: &Inputs<'_>, shared: &Shared) -> Names {
+    let hir = inputs.hir;
+    let analysis = Analysis::whole(hir, shared);
+    let mut members = inputs.split.client_members();
+    members.extend(analysis.operator_closure(hir, &members));
+    if hir.view.is_none() {
+        members.extend(analysis.client_closure().iter().copied());
+    }
+    Names::new(hir, &analysis, &members)
+}
+
 /// One document: its module, its stylesheet, and the server halves the
 /// split derived from the program it belongs to.
 fn emit(
@@ -1121,6 +1144,22 @@ fn emit(
     // knows which one this is.
     page_url: Option<&str>,
     shared: &Shared,
+    // The program's name table, when the caller has one.
+    //
+    // **A name is a property of the program and not of the document it is
+    // read in.** `Names::new` already allocates from `hir.defs` rather
+    // than from a document's members, which is why the same definition
+    // comes out spelled the same way in every one of a routed program's
+    // bundles — but not quite: a written `Signal` is given a setter only
+    // if *this* document reaches it, and `fresh` mutates the arena both
+    // passes draw from. So a signal written on one page and not another
+    // can shift a later name on one side alone.
+    //
+    // Nothing depended on that while every bundle was emitted whole. A
+    // shared chunk makes it load-bearing — two documents importing one
+    // definition must agree on what it is called — so a routed build
+    // settles the table once and hands the same one to every page.
+    names: Option<&Names>,
 ) -> Result<Emitted, Vec<CodegenError>> {
     let hir = inputs.hir;
     let split = inputs.split;
@@ -1158,11 +1197,18 @@ fn emit(
         client_members.extend(analysis.client_closure().iter().copied());
     }
 
-    let names = Names::new(hir, &analysis, &client_members);
+    let own_names;
+    let names = match names {
+        Some(names) => names,
+        None => {
+            own_names = Names::new(hir, &analysis, &client_members);
+            &own_names
+        }
+    };
     let mut emitter = Emitter {
         hir,
         types: table,
-        names: &names,
+        names,
         analysis: &analysis,
         bindings,
         used: RuntimeImports::default(),
@@ -1214,7 +1260,7 @@ fn emit(
         let mut server_emitter = Emitter {
             hir,
             types: table,
-            names: &names,
+            names,
             analysis: &analysis,
             bindings,
             used: RuntimeImports::default(),
@@ -1599,7 +1645,7 @@ fn emit(
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,
         functions: server,
-        names,
+        names: names.clone(),
     })
 }
 
