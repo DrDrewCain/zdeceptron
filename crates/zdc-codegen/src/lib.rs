@@ -706,7 +706,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
     let painted = (options.first_paint && nodes.is_some())
-        .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+        .then(|| painted_markup(&emitted.client_js, &emitted.runtime, None))
         .flatten();
     // The name the document links and the name the file is written under,
     // computed once (#137). The stylesheet's bytes are settled by now, so
@@ -972,7 +972,13 @@ pub fn compile_site(
                 // Before the fields move: the prerender reads two of them.
                 let painted = options
                     .first_paint
-                    .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+                    .then(|| {
+                        painted_markup(
+                            &emitted.client_js,
+                            &emitted.runtime,
+                            chunk.as_ref().map(|(_, chunk)| chunk.client_js.as_str()),
+                        )
+                    })
                     .flatten();
                 // As in `compile`: the name in the document and the name
                 // on disk are one string, settled once the stylesheet's
@@ -2933,7 +2939,20 @@ pub fn document_path(url: &str) -> String {
 /// the program. The client builds the same tree either way, which is
 /// what makes skipping it safe.
 #[cfg(feature = "evaluate")]
-fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<String> {
+fn painted_markup(
+    client_js: &str,
+    runtime: &BTreeSet<&'static str>,
+    // The shared chunk, when this document imports one.
+    //
+    // Without it the paint is not merely wrong, it is *silently absent*:
+    // `flattened` drops the `import` line, the page's code then calls a
+    // name nothing in the scope declares, and the `ReferenceError` at
+    // load becomes the `None` this function is allowed to return. A
+    // routed program went on building and its documents quietly stopped
+    // arriving painted — which is exactly the failure `flattened`'s own
+    // comment was written about, one module further out.
+    chunk: Option<&str>,
+) -> Option<String> {
     // Development sources, assertions and all: a prerender that tripped
     // one is a prerender whose answer was wrong, and this is the one
     // place a build can find that out before a reader does.
@@ -2950,13 +2969,21 @@ fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<S
     // `zdc build` there and nowhere else — while `zdc check`, which skips
     // the paint, reported nothing, so the two disagreed about a program
     // they are supposed to agree about.
+    // Prepended rather than passed as another linked module, because the
+    // order is known here and need not be inferred: the chunk holds what
+    // the page reads, so it is loaded first, exactly as the runtime is
+    // loaded before both.
+    let program = match chunk {
+        Some(chunk) => format!("{chunk}\n{client_js}"),
+        None => client_js.to_string(),
+    };
     evaluate::on_a_deep_stack(|| {
-        prerender::prerender(client_js, &linked).map(|painted| painted.html)
+        prerender::prerender(&program, &linked).map(|painted| painted.html)
     })
 }
 
 #[cfg(not(feature = "evaluate"))]
-fn painted_markup(_: &str, _: &BTreeSet<&'static str>) -> Option<String> {
+fn painted_markup(_: &str, _: &BTreeSet<&'static str>, _: Option<&str>) -> Option<String> {
     None
 }
 
