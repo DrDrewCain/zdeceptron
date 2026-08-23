@@ -38,12 +38,23 @@
 //!       ]
 //!     }
 //!   ],
+//!   "anywhere": [                   // §21.8's third assertion, R5
+//!     {
+//!       "name": "spin",
+//!       "from": "./spin.js",
+//!       "export": "spin",
+//!       "primitive": false,
+//!       "declaredAt": {…},
+//!       "calls": [{…}]
+//!     }
+//!   ],
 //!   "endorsed": [                  // every `trusted p` clause, site A5
 //!     {"release": "digitOracle", "parameter": "all", "declaredAt": {…}}
 //!   ],
 //!   "library": {                    // the prelude's, named not located
 //!     "pure": ["bitAnd", …],
-//!     "trusted": []
+//!     "trusted": [],
+//!     "anywhere": ["bitAnd", …]
 //!   },
 //!   "notClaimed": ["…"]             // zdc_graph::NOT_CLAIMED, verbatim
 //! }
@@ -74,7 +85,7 @@
 //! apply and `JSON.parse` of the whole file is what a consumer wants.
 
 use zdc_graph::integrity::Grant;
-use zdc_graph::report::{AssertedGrant, Endorsement, ReleaseReach, Report};
+use zdc_graph::report::{AnywherePlacement, AssertedGrant, Endorsement, ReleaseReach, Report};
 use zdc_lexer::Span;
 use zdc_resolve::Linked;
 
@@ -94,6 +105,13 @@ pub fn json(report: &Report, linked: &Linked) -> String {
         .map(|grant| asserted(grant, linked))
         .collect();
     field(&mut out, "asserted", &format!("[{}]", entries.join(",")));
+    out.push(',');
+    let placed: Vec<String> = report
+        .anywhere
+        .iter()
+        .map(|placement| anywhere(placement, linked))
+        .collect();
+    field(&mut out, "anywhere", &format!("[{}]", placed.join(",")));
     out.push(',');
     let endorsed: Vec<String> = report
         .endorsed
@@ -168,6 +186,8 @@ fn library(grants: &zdc_graph::report::LibraryGrants) -> String {
     field(&mut out, "pure", &names(&grants.pure));
     out.push(',');
     field(&mut out, "trusted", &names(&grants.trusted));
+    out.push(',');
+    field(&mut out, "anywhere", &names(&grants.anywhere));
     out.push('}');
     out
 }
@@ -218,6 +238,44 @@ fn asserted(grant: &AssertedGrant, linked: &Linked) -> String {
         "reachedByReleases",
         &format!("[{}]", releases.join(",")),
     );
+    out.push('}');
+    out
+}
+
+/// One `is anywhere` declaration.
+///
+/// No `reachedByReleases`, and the absence is the point rather than an
+/// omission. That list answers *which declassification does this
+/// assertion let compile*, which is a question about the integrity
+/// lattice; a placement awards no authority and no `release` rests on
+/// one. What a reviewer wants here is where it was declared and where it
+/// is called, and claiming more would be the shape of thing §21.8.8
+/// forbids.
+fn anywhere(placement: &AnywherePlacement, linked: &Linked) -> String {
+    let mut out = String::from("{");
+    field(&mut out, "name", &string(&printable(&placement.name)));
+    out.push(',');
+    field(
+        &mut out,
+        "from",
+        &match &placement.module {
+            Some(module) => string(&printable(module)),
+            None => "null".to_string(),
+        },
+    );
+    out.push(',');
+    field(&mut out, "export", &string(&printable(&placement.export)));
+    out.push(',');
+    field(&mut out, "primitive", &placement.primitive.to_string());
+    out.push(',');
+    field(&mut out, "declaredAt", &place(placement.declared_at, linked));
+    out.push(',');
+    let calls: Vec<String> = placement
+        .calls
+        .iter()
+        .map(|span| place(*span, linked))
+        .collect();
+    field(&mut out, "calls", &format!("[{}]", calls.join(",")));
     out.push('}');
     out
 }
