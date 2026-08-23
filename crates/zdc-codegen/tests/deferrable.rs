@@ -177,3 +177,85 @@ fn it_runs_on_every_example_whose_view_holds_a_branch() {
          is not finding `if` nodes at all"
     );
 }
+
+/// **A component rendered twice is one region, not two.**
+///
+/// The walk finds an `if` once per *occurrence* in the tree, and a
+/// component's body is in the tree once per render — so the same `if`,
+/// with the same span, was found repeatedly and its definitions named
+/// repeatedly. Measured on a real routed program: 36 `if`s where there
+/// were 9, and 4,331 definitions summed where 871 are distinct. A caller
+/// sizing a deferred chunk from that sum would have sized it five times
+/// too large.
+///
+/// The four claims above this one all passed while that was true, because
+/// each uses a single-render program.
+#[test]
+fn a_component_rendered_twice_offers_one_region() {
+    let hir = hir_of(
+        r#"
+state open is client Truth starting no
+
+function onlyInside of value
+    give value + 1
+
+state count is client Whole starting 0
+
+component Panel
+    Column
+        if open
+            Text (text of (onlyInside of count))
+
+view
+    Column
+        Panel
+        Panel
+        Panel
+"#,
+    );
+    let regions = deferrable_regions(&hir, view_nodes(&hir));
+    assert_eq!(
+        regions.len(),
+        1,
+        "three renders of one component are one `if`, and this found {}",
+        regions.len()
+    );
+}
+
+/// **What the rule names on a real routed program**, printed rather than
+/// asserted: this is a measurement, and the number is the argument for
+/// whether the rest of #401 is worth building.
+#[test]
+#[ignore = "a measurement, not a gate; run with --ignored --nocapture"]
+fn measure_a_real_site() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(std::env::var("ZDC_PROBE").unwrap_or_else(|_| "../../examples/site.zd".to_string()));
+    let linked = zdc_resolve::load(&path).expect("load");
+    let hir = zdc_resolve::Resolver::linked_with_prelude(zdc_lib::load().program(), &linked)
+        .resolve()
+        .expect("resolve");
+    let Some(nodes) = nodes_of(&hir) else {
+        println!("no view");
+        return;
+    };
+    let regions = deferrable_regions(&hir, nodes);
+    println!("view-position ifs: {}", regions.len());
+    for (n, region) in regions.iter().enumerate() {
+        println!(
+            "  region {n}: reaches {}, exclusively holds {}",
+            region.reached.len(),
+            region.exclusive.len()
+        );
+    }
+    let mut distinct = std::collections::BTreeSet::new();
+    for region in &regions {
+        distinct.extend(region.exclusive.iter().copied());
+    }
+    let summed: usize = regions.iter().map(|r| r.exclusive.len()).sum();
+    println!("summed across regions: {summed}");
+    println!("distinct definitions:  {}", distinct.len());
+    println!(
+        "non-empty regions:     {}",
+        regions.iter().filter(|r| !r.exclusive.is_empty()).count()
+    );
+}
