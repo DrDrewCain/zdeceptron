@@ -676,7 +676,8 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         // An unrouted program emits one document, so its table has nobody
         // to agree with and is settled where it is used.
         None,
-        )?;
+        None,
+    )?;
 
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
@@ -834,6 +835,7 @@ pub fn compile_site(
             Some(&page.url),
             &shared,
             Some(&program_names),
+            None,
         ) {
             Ok(emitted) => {
                 if page.variant.is_none() {
@@ -1111,6 +1113,44 @@ fn page_title(options: &Options, metadata: &Metadata, url: &str) -> String {
     format!("{base} · {url}")
 }
 
+/// What a document reaches, before anything decides what it should carry.
+///
+/// Lifted out of [`emit`] so a routed build can ask the question of every
+/// page before emitting any of them: two documents cannot be given one
+/// shared chunk until something has compared what each of them needs.
+fn reachable_members(
+    hir: &Hir,
+    split: &TierSplit,
+    analysis: &Analysis,
+    layout: Layout,
+) -> BTreeSet<DefId> {
+    // The split proved what the program's own code reaches. It could not
+    // prove what a type-directed operator reaches, because the checker had
+    // not run yet, so that part of the closure is added here — seeded from
+    // this root's own members, so the bundle grows only by what it can
+    // actually reach (§17.4.5).
+    let mut members = split.client_members();
+    members.extend(analysis.operator_closure(hir, &members));
+    // A document reaches only the arm it renders, so the page walk
+    // *narrows* the split's answer. It never widens it: the intersection
+    // cannot readmit a definition the split stopped at, which is what
+    // keeps §14A.1's exclusion an exclusion.
+    if layout == Layout::Page {
+        members.retain(|id| analysis.client_closure().contains(id));
+    }
+    // A module with no `view` has no root for the split to walk from, so
+    // the split names nothing and the module would come out empty. Its
+    // use is the importing file's `for` list, which is outside this
+    // compilation unit — so §14D.2's rule applies instead: every
+    // top-level declaration is importable, and the walk seeds from all of
+    // them. Nothing crosses a boundary here, because a module with no
+    // view has no client for anything to cross to.
+    if hir.view.is_none() {
+        members.extend(analysis.client_closure().iter().copied());
+    }
+    members
+}
+
 /// The name table a routed program's documents all read from.
 ///
 /// Built from the whole program — [`Analysis::whole`] and the split's
@@ -1160,6 +1200,17 @@ fn emit(
     // definition must agree on what it is called — so a routed build
     // settles the table once and hands the same one to every page.
     names: Option<&Names>,
+    // The definitions this document is to carry, when the caller is
+    // apportioning them rather than letting each document take everything
+    // it reaches.
+    //
+    // A routed program's documents overlap almost entirely — every route
+    // of the portfolio reaches every game, because the shell can launch
+    // one — so *what it reaches* and *what it should carry* stop being
+    // the same question once a chunk exists for them to share. `None`
+    // keeps the old answer, which is the only answer an unrouted program
+    // has.
+    members: Option<&BTreeSet<DefId>>,
 ) -> Result<Emitted, Vec<CodegenError>> {
     let hir = inputs.hir;
     let split = inputs.split;
@@ -1172,29 +1223,10 @@ fn emit(
         Layout::Page => Analysis::page(hir, roots, bindings, shared),
     };
 
-    // The split proved what the program's own code reaches. It could not
-    // prove what a type-directed operator reaches, because the checker had
-    // not run yet, so that part of the closure is added here — seeded from
-    // this root's own members, so the bundle grows only by what it can
-    // actually reach (§17.4.5).
-    let mut client_members = split.client_members();
-    client_members.extend(analysis.operator_closure(hir, &client_members));
-    // A document reaches only the arm it renders, so the page walk
-    // *narrows* the split's answer. It never widens it: the intersection
-    // cannot readmit a definition the split stopped at, which is what
-    // keeps §14A.1's exclusion an exclusion.
-    if layout == Layout::Page {
-        client_members.retain(|id| analysis.client_closure().contains(id));
-    }
-    // A module with no `view` has no root for the split to walk from, so
-    // the split names nothing and the module would come out empty. Its
-    // use is the importing file's `for` list, which is outside this
-    // compilation unit — so §14D.2's rule applies instead: every
-    // top-level declaration is importable, and the walk seeds from all of
-    // them. Nothing crosses a boundary here, because a module with no
-    // view has no client for anything to cross to.
-    if hir.view.is_none() {
-        client_members.extend(analysis.client_closure().iter().copied());
+    let mut client_members = reachable_members(hir, split, &analysis, layout);
+
+    if let Some(carried) = members {
+        client_members.retain(|id| carried.contains(id));
     }
 
     let own_names;
