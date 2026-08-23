@@ -133,6 +133,39 @@ pub struct AssertedGrant {
     pub releases: Vec<ReleaseReach>,
 }
 
+/// One `foreign` declaring `is anywhere` — the third assertion R5 names,
+/// and the one that had no entry here.
+///
+/// §21.8's residual risk R5 counts three words asserted about
+/// third-party JavaScript and checked by nobody: `gives pure T`, `gives
+/// trusted T`, and `is anywhere`. The first two are grants and arrive as
+/// [`AssertedGrant`]. The third is a *placement*, so it is not in
+/// [`Grant::CLOSED_LIST`] and cannot be without breaking the argument
+/// that list carries — and until this struct existed, a `foreign` that
+/// asserted only `is anywhere` appeared nowhere in the report at all.
+/// `report()`'s `Opaque => continue` dropped it.
+///
+/// **Why `anywhere` and not `client` or `server`.** All three are claims
+/// about somebody's JavaScript and none is verified. The other two are
+/// *confined*, though: a `is client` foreign is refused a place in the
+/// server bundle, so the compiler acts on the claim even though it
+/// cannot check it. `anywhere` asks for both bundles and is confined by
+/// nothing, which is what leaves it with no enforcement site and
+/// therefore no reader but this file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnywherePlacement {
+    pub def: DefId,
+    pub name: String,
+    /// The module specifier, or `None` for a method or a property.
+    pub module: Option<String>,
+    pub export: String,
+    pub primitive: bool,
+    pub declared_at: Span,
+    /// Every call to it, in source order — the same walk
+    /// [`AssertedGrant::calls`] reports, for the same reason.
+    pub calls: Vec<Span>,
+}
+
 /// One `trusted p` clause on a `release` — obligation site **A5**.
 ///
 /// The other human signature, and it is here because E-REL-08's help text
@@ -172,6 +205,12 @@ pub struct ReleaseReach {
 pub struct LibraryGrants {
     pub pure: Vec<String>,
     pub trusted: Vec<String>,
+    /// The prelude's `is anywhere` declarations. Nearly all of them are:
+    /// a language's own primitives are the things that have to work in
+    /// both bundles. Named here rather than listed above for
+    /// [`LIBRARY_NOTE`]'s reason, and held apart for the same one — this
+    /// list is identical in every program and the one above is not.
+    pub anywhere: Vec<String>,
 }
 
 /// Every asserted grant in a program, in declaration order, with the
@@ -181,6 +220,12 @@ pub struct Report {
     /// The program's own declarations — the ones that vary between
     /// programs and that nobody but this program's reviewer will read.
     pub asserted: Vec<AssertedGrant>,
+    /// Every `foreign` declaring `is anywhere`, in declaration order,
+    /// whatever its `gives` line says. A `foreign` may assert both and
+    /// then appears in both lists, because a reviewer asking *what does
+    /// this build assume runs in both bundles* wants all of them and not
+    /// the ones that happen to lack a second assertion.
+    pub anywhere: Vec<AnywherePlacement>,
     /// Every `trusted p` clause, in declaration order.
     pub endorsed: Vec<Endorsement>,
     /// The prelude's, which are the same in every program.
@@ -196,18 +241,43 @@ pub struct Report {
 pub fn report(hir: &Hir) -> Report {
     let calls = foreign_calls(hir);
     let mut asserted = Vec::new();
+    let mut anywhere = Vec::new();
     let mut library = LibraryGrants::default();
     for (id, def) in hir.defs.iter() {
         let DefKind::Foreign(foreign) = &def.kind else {
             continue;
         };
+        // The placement is read before the grant and independently of it,
+        // because the two assertions are independent: §21.8 separated
+        // *where may this be linked* from *is the result a function of the
+        // arguments* precisely so that neither answer could be inferred
+        // from the other. A `foreign` asserting both is in both lists.
+        let asserts_anywhere = foreign.site == zdc_ast::ForeignSite::Anywhere;
         if hir.is_prelude_def(id) {
+            if asserts_anywhere {
+                library.anywhere.push(def.name.clone());
+            }
             match foreign.result_grant {
                 zdc_ast::ForeignGrant::Pure => library.pure.push(def.name.clone()),
                 zdc_ast::ForeignGrant::Trusted => library.trusted.push(def.name.clone()),
                 zdc_ast::ForeignGrant::Opaque => {}
             }
             continue;
+        }
+        if asserts_anywhere {
+            anywhere.push(AnywherePlacement {
+                def: id,
+                name: def.name.clone(),
+                module: foreign.module().map(str::to_string),
+                export: foreign.export.as_str().to_string(),
+                primitive: foreign.is_primitive(),
+                declared_at: def.span,
+                calls: calls
+                    .iter()
+                    .filter(|(callee, _)| *callee == id)
+                    .map(|(_, span)| *span)
+                    .collect(),
+            });
         }
         // Exhaustive over `ForeignGrant`, with no wildcard, so a fourth
         // claim about a result has to be ruled on here as well as at the
@@ -243,8 +313,10 @@ pub fn report(hir: &Hir) -> Report {
     }
     library.pure.sort();
     library.trusted.sort();
+    library.anywhere.sort();
     Report {
         asserted,
+        anywhere,
         endorsed: endorsements(hir),
         library,
     }
