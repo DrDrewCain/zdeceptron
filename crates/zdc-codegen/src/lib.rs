@@ -541,7 +541,7 @@ pub struct ProgramChunk {
 
 pub struct PageBundle {
     /// The `foreign` modules this page's `client_js` imports by relative
-/// path (#223). Same contract as [`Bundle::linked_modules`].
+    /// path (#223). Same contract as [`Bundle::linked_modules`].
     pub linked_modules: BTreeSet<LinkedModule>,
     /// The URL this document is served at.
     pub url: String,
@@ -887,6 +887,32 @@ pub fn compile_site(
         let name = hash::hashed_name("program.js", emitted.client_js.as_bytes());
         Some((name, emitted))
     };
+    // **The runtime the chunk reaches, which may be runtime no page
+    // reaches any more.** The set every writer copies is a union over the
+    // documents, and moving a definition into the chunk moves its runtime
+    // import with it: the portfolio's games call `everyFrame`, so
+    // `clock.js` left every page at once and was copied for nobody. The
+    // chunk then imported a file that was not there, the module failed to
+    // load, and with it every page that imports the chunk — which is all
+    // of them.
+    let chunk_runtime: BTreeSet<&'static str> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.runtime.clone())
+        .unwrap_or_default();
+    let chunk_modules: BTreeSet<LinkedModule> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.linked_modules.clone())
+        .unwrap_or_default();
+    // The same for what it reaches over the network: the manifest
+    // describes the program, and a chunk is part of the program.
+    let chunk_remote: BTreeSet<String> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.remote_origins.clone())
+        .unwrap_or_default();
+    let chunk_connect: BTreeSet<String> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.connect_origins.clone())
+        .unwrap_or_default();
     let chunk_specifier = chunk
         .as_ref()
         // A page and the chunk sit in the same directory, so the page
@@ -1057,7 +1083,17 @@ pub fn compile_site(
     // well as its hash, so two pages never collide here; the `dedup` is
     // for the caller's benefit, which merges this with the asset walk's
     // list and should not have to think about it.
+    runtime.extend(chunk_runtime.iter().copied());
+    remote_origins.extend(chunk_remote);
+    connect_origins.extend(chunk_connect);
     let mut immutable: Vec<String> = pages.iter().map(|page| page.styles_path.clone()).collect();
+    // The chunk carries a content hash in its name for the same reason a
+    // stylesheet does, so it earns the same answer from a cache: the name
+    // changes when the bytes do, and a name that cannot go stale can be
+    // held forever (#137).
+    if let Some((name, _)) = &chunk {
+        immutable.push(format!("pages/{name}"));
+    }
     immutable.sort();
     immutable.dedup();
     Ok(SiteBundle {
@@ -1071,9 +1107,19 @@ pub fn compile_site(
                 definitions: program_chunk.len(),
             }
         }),
+        // The chunk's, as well as the pages'. A `foreign` called from a
+        // shared function has its `import` in the chunk now, so the file
+        // it names is one the *chunk* asks for — and a module nobody
+        // asked for is a module nobody copies, which is a bundle whose
+        // first import 404s.
         linked_modules: pages
             .iter()
             .flat_map(|p| p.linked_modules.iter().cloned())
+            .chain(
+                chunk_modules
+                    .iter()
+                    .cloned(),
+            )
             .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
             .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
