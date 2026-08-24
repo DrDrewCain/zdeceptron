@@ -67,6 +67,22 @@ fn build(path: &std::path::Path) -> SiteBundle {
     })
 }
 
+/// A document's module *and* the chunk it reads from, in load order.
+///
+/// A page used to be the whole of what a browser ran. It is not any
+/// more: the definitions more than one route reaches are emitted once
+/// into `pages/program.<hash>.js` and imported, so running a page's
+/// module alone calls names nothing declared. The browser is handed both
+/// and resolves the import; these tests have no module loader, so they
+/// are handed both concatenated, which is what `prerender` does for the
+/// same reason.
+fn program<'a>(site: &'a SiteBundle, url: &str) -> String {
+    match &site.program_chunk {
+        Some(chunk) => format!("{}\n{}", chunk.client_js, page(site, url).client_js),
+        None => page(site, url).client_js.clone(),
+    }
+}
+
 fn page<'a>(site: &'a SiteBundle, url: &str) -> &'a PageBundle {
     site.pages
         .iter()
@@ -158,17 +174,32 @@ fn one_pages_code_is_not_in_another_pages_bundle() {
 #[test]
 fn a_shared_helper_is_shared_whole_rather_than_specialised() {
     let site = site_example();
-    let routing = &page(&site, "/writing/routing").client_js;
+    // **Where it lives moved; what it is did not.** The helper is
+    // reached by both entry documents, so it is emitted once into the
+    // chunk rather than specialised into each — and it is still emitted
+    // *whole*, with the branch this page does not take. That is the
+    // claim: a shared definition is not narrowed to its caller.
+    let shared = program(&site, "/writing/routing");
     assert!(
-        routing.contains("An immutable signal has one value"),
-        "the shared helper's other branch is part of the helper:\n{routing}"
+        shared.contains("An immutable signal has one value"),
+        "the shared helper's other branch is part of the helper:\n{shared}"
     );
     assert!(
         !page(&site, "/")
             .client_js
             .contains("An immutable signal has one value"),
-        "but a page that never calls it does not carry it"
+        "and a page that never calls it does not carry it in its own module"
     );
+    // What the chunk costs, said out loud rather than left implied: the
+    // home page does not *carry* the helper and does still *fetch* it,
+    // because the chunk is one file. §16.3.1's claim is about what a
+    // document is emitted with, and that is what is asserted above.
+    if let Some(chunk) = &site.program_chunk {
+        assert!(
+            chunk.client_js.contains("An immutable signal has one value"),
+            "the definition two pages reach is in the file they share"
+        );
+    }
 }
 
 /// §14G.2 revision 1's second consequence: the parameter is a constant
@@ -326,7 +357,7 @@ serialize($host)
     for (url, needle) in expected {
         let page = page(&site, url);
         let mut context = context(false);
-        let rendered = run(&mut context, &page.client_js, DRIVER);
+        let rendered = run(&mut context, &program(&site, url), DRIVER);
         assert!(
             rendered.contains(needle),
             "{url} did not render `{needle}`:\n{rendered}"
@@ -349,7 +380,7 @@ walk($host).filter((n) => n.tagName === 'a').map((n) => n.attributes.href).join(
     let mut checked = 0;
     for page in &site.pages {
         let mut context = context(false);
-        let hrefs = run(&mut context, &page.client_js, DRIVER);
+        let hrefs = run(&mut context, &program(&site, &page.url), DRIVER);
         for href in hrefs.split_whitespace() {
             checked += 1;
             assert!(
@@ -719,6 +750,7 @@ fn the_runtime_the_chunk_imports_is_in_the_set_the_writer_copies() {
         .as_ref()
         .expect("this program emits a chunk");
 
+    let mut checked = 0;
     for line in chunk.client_js.lines() {
         let Some(rest) = line.strip_prefix("import ") else {
             continue;
@@ -730,10 +762,19 @@ fn the_runtime_the_chunk_imports_is_in_the_set_the_writer_copies() {
         let Some(module) = specifier.strip_prefix("../runtime/") else {
             continue;
         };
+        checked += 1;
         assert!(
             site.runtime.iter().any(|named| named.ends_with(module)),
             "the chunk imports `{module}`, which nothing would copy: {:?}",
             site.runtime
         );
     }
+    // Without this the test passes on a chunk that imports nothing, which
+    // is the shape of the fault it exists for: `clock.js` went missing
+    // because a definition *moved* and took its import with it.
+    assert!(
+        checked > 0,
+        "the chunk imports no runtime at all, so this checked nothing:\n{}",
+        chunk.client_js.lines().take(8).collect::<Vec<_>>().join("\n")
+    );
 }
