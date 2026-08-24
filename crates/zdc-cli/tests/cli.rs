@@ -670,10 +670,6 @@ fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
     );
 }
 
-/// The flag is a flag: a plain `zdc build` writes a bundle a browser loads
-/// and nothing else. A review artifact in every `dist/` is a review
-/// artifact nobody asked for and a file a static host would serve.
-
 /// **The assertion that reached `report.json` through no other door.**
 ///
 /// This program's `foreign` claims nothing about its result, so it awards
@@ -765,6 +761,10 @@ fn build_report_writes_the_placement_of_a_foreign_that_asserts_nothing_else() {
         "the prelude asserts its own, and they are held apart:\n{text}"
     );
 }
+
+/// The flag is a flag: a plain `zdc build` writes a bundle a browser loads
+/// and nothing else. A review artifact in every `dist/` is a review
+/// artifact nobody asked for and a file a static host would serve.
 #[test]
 fn a_build_without_the_flag_writes_no_report() {
     let out = TempDir::new("build-no-report");
