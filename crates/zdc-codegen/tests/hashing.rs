@@ -203,7 +203,9 @@ fn every_routed_document_links_and_records_its_own_stylesheet() {
     assert_eq!(site.immutable.len(), expected, "{:?}", site.immutable);
     if let Some(chunk) = &site.program_chunk {
         assert!(
-            site.immutable.iter().any(|path| path.ends_with(&chunk.name)),
+            site.immutable
+                .iter()
+                .any(|path| path.ends_with(&chunk.name)),
             "the chunk is named by its bytes, so it may be held: {:?}",
             site.immutable
         );
@@ -235,10 +237,13 @@ fn the_program_chunk_is_hashed_and_the_pages_name_what_was_written() {
         if page.client_js.contains(&chunk.name) {
             naming += 1;
             assert!(
-                page.client_js
-                    .contains(&format!("from './{}'", chunk.name)),
+                page.client_js.contains(&format!("from './{}'", chunk.name)),
                 "a page names the chunk by the name it was written under:\n{}",
-                page.client_js.lines().take(6).collect::<Vec<_>>().join("\n")
+                page.client_js
+                    .lines()
+                    .take(6)
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
         }
     }

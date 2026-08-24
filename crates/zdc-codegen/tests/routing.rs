@@ -196,7 +196,9 @@ fn a_shared_helper_is_shared_whole_rather_than_specialised() {
     // document is emitted with, and that is what is asserted above.
     if let Some(chunk) = &site.program_chunk {
         assert!(
-            chunk.client_js.contains("An immutable signal has one value"),
+            chunk
+                .client_js
+                .contains("An immutable signal has one value"),
             "the definition two pages reach is in the file they share"
         );
     }
@@ -775,6 +777,11 @@ fn the_runtime_the_chunk_imports_is_in_the_set_the_writer_copies() {
     assert!(
         checked > 0,
         "the chunk imports no runtime at all, so this checked nothing:\n{}",
-        chunk.client_js.lines().take(8).collect::<Vec<_>>().join("\n")
+        chunk
+            .client_js
+            .lines()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
