@@ -1377,6 +1377,14 @@ fn whole_program_names(inputs: &Inputs<'_>, shared: &Shared) -> Names {
 
 /// One document: its module, its stylesheet, and the server halves the
 /// split derived from the program it belongs to.
+///
+/// Nine arguments, which is two past the lint's taste and is the shape of
+/// the thing: a document is what the program, the options, a node slice,
+/// its bindings, a layout, a URL, the shared analysis, a name table and a
+/// member set jointly determine. Grouping some of them into a struct
+/// would name a thing with no other use, and would hide which of them a
+/// routed build supplies and an unrouted one leaves to `emit`.
+#[allow(clippy::too_many_arguments)]
 fn emit(
     inputs: &Inputs<'_>,
     options: &Options,
@@ -1515,13 +1523,7 @@ fn emit(
             media: BTreeMap::new(),
             scroll: false,
         };
-        let served = emit_server(
-            hir,
-            split,
-            &names,
-            &mut server_emitter,
-            &options.source_path,
-        );
+        let served = emit_server(hir, split, names, &mut server_emitter, &options.source_path);
         emitter.errors.extend(server_emitter.errors);
         (served, server_emitter.used.foreign)
     };
