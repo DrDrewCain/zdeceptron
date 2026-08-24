@@ -647,3 +647,90 @@ fn a_routed_manifest_names_no_entry_and_an_unrouted_one_does() {
         page.manifest_json
     );
 }
+
+/// **The program's own code, written once.**
+///
+/// §14A's argument is bundle size, and the per-page split won half of it:
+/// the runtime is shared and the program was not. Every route of a site
+/// whose shell can reach a definition carries that definition, so the
+/// portfolio shipped the same 427 KB thirty-three times and its 404 page
+/// was 453 KB of JavaScript.
+#[test]
+fn a_definition_two_pages_reach_is_emitted_once_and_imported() {
+    let site = site_example();
+    let chunk = site
+        .program_chunk
+        .as_ref()
+        .expect("a site whose pages share a definition emits a chunk");
+
+    let shared: Vec<&PageBundle> = site
+        .pages
+        .iter()
+        .filter(|page| page.client_js.contains(&chunk.name))
+        .collect();
+    assert!(
+        shared.len() > 1,
+        "a chunk exists because more than one page reads from it"
+    );
+    for page in &shared {
+        assert!(
+            page.client_js
+                .contains(&format!("from './{}'", chunk.name)),
+            "a page names the chunk beside itself, not at the site root — \
+             both sit in `pages/`:\n{}",
+            page.client_js.lines().take(6).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    // The definition is in the chunk and in none of the pages that read
+    // it. Emitting it in both would be the duplication this removes,
+    // wearing an import.
+    let example = "function titleOf(";
+    assert!(
+        chunk.client_js.contains(example),
+        "the chunk holds what the pages share:\n{}",
+        chunk.client_js
+    );
+    for page in &shared {
+        assert!(
+            !page.client_js.contains(example),
+            "and a page that imports it does not also carry it:\n{}",
+            page.slug
+        );
+    }
+}
+
+/// **What the chunk imports is copied too.**
+///
+/// The runtime set is a union over the documents, and it is what every
+/// writer of a bundle copies. Moving a definition into the chunk moves
+/// its runtime import with it — so a module the chunk reaches and no page
+/// reaches any more was copied for nobody. The chunk then imported a file
+/// that was not there, and every page that imports the chunk failed to
+/// load with it, while `zdc build` reported nothing at all.
+#[test]
+fn the_runtime_the_chunk_imports_is_in_the_set_the_writer_copies() {
+    let site = site_example();
+    let chunk = site
+        .program_chunk
+        .as_ref()
+        .expect("this program emits a chunk");
+
+    for line in chunk.client_js.lines() {
+        let Some(rest) = line.strip_prefix("import ") else {
+            continue;
+        };
+        let Some(from) = rest.split(" from ").nth(1) else {
+            continue;
+        };
+        let specifier = from.trim().trim_matches(|c| c == '\'' || c == ';');
+        let Some(module) = specifier.strip_prefix("../runtime/") else {
+            continue;
+        };
+        assert!(
+            site.runtime.iter().any(|named| named.ends_with(module)),
+            "the chunk imports `{module}`, which nothing would copy: {:?}",
+            site.runtime
+        );
+    }
+}

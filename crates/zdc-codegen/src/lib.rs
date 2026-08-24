@@ -999,9 +999,19 @@ pub fn compile_site(
                 let painted = options
                     .first_paint
                     .then(|| {
+                        // The union, and for the reason the writer needs
+                        // one: the paint runs the chunk too, and the
+                        // chunk's runtime is exactly what this page's
+                        // set no longer names. Handing the page's alone
+                        // leaves `everyFrame` undeclared in the sandbox,
+                        // which is a `ReferenceError`, which is a first
+                        // paint silently not taken — the same fault as
+                        // the missing file, one layer in.
+                        let mut reached = emitted.runtime.clone();
+                        reached.extend(chunk_runtime.iter().copied());
                         painted_markup(
                             &emitted.client_js,
-                            &emitted.runtime,
+                            &reached,
                             chunk.as_ref().map(|(_, chunk)| chunk.client_js.as_str()),
                         )
                     })
@@ -2984,6 +2994,51 @@ pub fn document_path(url: &str) -> String {
 /// shipped before this existed, and none of them is a reason to refuse
 /// the program. The client builds the same tree either way, which is
 /// what makes skipping it safe.
+/// `page`, without the declarations `chunk` already makes.
+///
+/// §17.4.7's primitive layer is *inlined* rather than imported — each
+/// module that reaches `$textOf` writes its own — and in a browser that
+/// is right: two modules are two scopes, and each gets its own copy of a
+/// three-line arrow function. The paint puts every module in one scope,
+/// where a second `const $textOf` is not a duplicate but a `SyntaxError`,
+/// and the whole document fails to load rather than painting wrong.
+///
+/// So the repeat is dropped here, in the one place the two scopes become
+/// one, and the emitted bundles are left as they are. They are not
+/// wrong: `zdc build` ships thirty-three pages that each declare their
+/// own helpers and thirty-three browsers that each accept them.
+///
+/// Matched by whole line and only for a `$`-prefixed name, which is the
+/// prefix §17.4.1 keeps outside XID precisely so no program's own
+/// declaration can be spelled like one.
+fn without_repeats(page: &str, chunk: &str) -> String {
+    let depth_of = |line: &str| {
+        let opens = line.matches(['{', '(', '[']).count() as i32;
+        let closes = line.matches(['}', ')', ']']).count() as i32;
+        opens - closes
+    };
+    let mut out = String::new();
+    let mut lines = page.lines();
+    while let Some(line) = lines.next() {
+        let declares_a_helper = line.starts_with("const $") || line.starts_with("class $");
+        if declares_a_helper && chunk.contains(line) {
+            // The declaration may run past its first line, so it is
+            // followed to its close rather than dropped by the line.
+            let mut depth = depth_of(line);
+            while depth > 0 {
+                match lines.next() {
+                    Some(line) => depth += depth_of(line),
+                    None => break,
+                }
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(feature = "evaluate")]
 fn painted_markup(
     client_js: &str,
@@ -3020,7 +3075,7 @@ fn painted_markup(
     // the page reads, so it is loaded first, exactly as the runtime is
     // loaded before both.
     let program = match chunk {
-        Some(chunk) => format!("{chunk}\n{client_js}"),
+        Some(chunk) => format!("{chunk}\n{}", without_repeats(client_js, chunk)),
         None => client_js.to_string(),
     };
     evaluate::on_a_deep_stack(|| {
