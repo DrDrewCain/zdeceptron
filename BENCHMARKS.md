@@ -730,11 +730,42 @@ they have always measured.
 ten-route site's 10,350 emitted bytes are still text some other page also carries — 928 of
 `site.zd`'s 4,400. Per-page specialisation is the cause rather than an oversight: `/post/one`
 and `/post/two` differ only in one folded literal, so ten enumerated values emit ten
-near-identical modules that share a template, two helpers and most of `main`. Hoisting those
-into a module the pages import would trade §16.3.1's per-document dead-code claim — pinned by
-`one_pages_code_is_not_in_another_pages_bundle` — for cache reuse across navigations. That is a
-decision about the claim, not an optimisation of it, so it is left to the issue that owns the
-claim rather than folded in here.
+near-identical modules that share a template, two helpers and most of `main`.
+
+### The fold, taken (#401)
+
+The paragraph that stood here said hoisting those into a module the pages import would trade
+§16.3.1's per-document dead-code claim for cache reuse across navigations, and that the trade
+was a decision rather than an optimisation. That was right, and the decision has now been
+taken.
+
+Measured on `~/zdc-portfolio`, which is the program that made the cost visible — 33 routes, a
+shell that can launch eleven games, so every route reaches every game:
+
+| | before | after |
+|---|---|---|
+| route bundles | 18,118,755 | 4,578,164 |
+| shared program chunk | — | 457,774 |
+| **total** | **18,118,755** | **5,035,938 (27.8%)** |
+| largest route | 558,668 | 144,992 |
+| smallest route, the 404 page | 453,783 | **40,757** |
+| prerendered markup | 356,990 | 356,990 |
+
+**13.1 MB saved, and the 404 page is 11× smaller.** 782 of its 785 shared definitions were
+already emitted byte-for-byte identically in all 33 bundles, because `Names::new` allocates
+from the whole program rather than from a document's members — which is why the fold needed no
+renaming pass, only somewhere to put them.
+
+**What the trade actually is.** A definition more than one page reaches is emitted once, so a
+page no longer *carries* what its neighbours reach — and does still *fetch* it, because the
+chunk is one file. §16.3.1's claim survives as a claim about what a document is emitted with,
+which is what `a_shared_helper_is_shared_whole_rather_than_specialised` now asserts. It does
+not survive as a claim about bytes over the wire, and no test pretends otherwise.
+
+**A first visit costs slightly more**: 630 KB against 583 KB on the portfolio, because the
+chunk holds what any two routes share and one page needs only part of it. Every page after the
+first costs its own ~138 KB rather than ~549 KB. Splitting the chunk by which routes reach each
+definition would recover the first visit at the price of more files, and is not done here.
 
 ### The empty-program baseline
 
