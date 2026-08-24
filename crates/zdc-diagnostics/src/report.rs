@@ -268,7 +268,11 @@ fn anywhere(placement: &AnywherePlacement, linked: &Linked) -> String {
     out.push(',');
     field(&mut out, "primitive", &placement.primitive.to_string());
     out.push(',');
-    field(&mut out, "declaredAt", &place(placement.declared_at, linked));
+    field(
+        &mut out,
+        "declaredAt",
+        &place(placement.declared_at, linked),
+    );
     out.push(',');
     let calls: Vec<String> = placement
         .calls
