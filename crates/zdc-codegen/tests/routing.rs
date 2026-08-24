@@ -357,7 +357,6 @@ serialize($host)
         ("/404", "That URL is not part of this site."),
     ];
     for (url, needle) in expected {
-        let page = page(&site, url);
         let mut context = context(false);
         let rendered = run(&mut context, &program(&site, url), DRIVER);
         assert!(
