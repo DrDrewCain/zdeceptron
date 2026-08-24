@@ -674,11 +674,14 @@ fn a_definition_two_pages_reach_is_emitted_once_and_imported() {
     );
     for page in &shared {
         assert!(
-            page.client_js
-                .contains(&format!("from './{}'", chunk.name)),
+            page.client_js.contains(&format!("from './{}'", chunk.name)),
             "a page names the chunk beside itself, not at the site root — \
              both sit in `pages/`:\n{}",
-            page.client_js.lines().take(6).collect::<Vec<_>>().join("\n")
+            page.client_js
+                .lines()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
 

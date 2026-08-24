@@ -839,8 +839,7 @@ pub fn compile_site(
         .iter()
         .map(|page| {
             let specialised = pages::specialise(hir, &nodes, page);
-            let analysis =
-                Analysis::page(hir, &specialised.nodes, &specialised.bindings, &shared);
+            let analysis = Analysis::page(hir, &specialised.nodes, &specialised.bindings, &shared);
             reachable_members(hir, inputs.split, &analysis, Layout::Page)
         })
         .collect();
@@ -950,14 +949,9 @@ pub fn compile_site(
         // What this page keeps, and what it now reads from the chunk. The
         // two partition what it reaches, so nothing is dropped and
         // nothing is written twice.
-        let carried: BTreeSet<DefId> = reached[nth]
-            .difference(&program_chunk)
-            .copied()
-            .collect();
-        let imported: BTreeSet<DefId> = reached[nth]
-            .intersection(&program_chunk)
-            .copied()
-            .collect();
+        let carried: BTreeSet<DefId> = reached[nth].difference(&program_chunk).copied().collect();
+        let imported: BTreeSet<DefId> =
+            reached[nth].intersection(&program_chunk).copied().collect();
         let apportion = chunk.as_ref().map(|_| Apportion {
             carried: &carried,
             imported: &imported,
@@ -1125,11 +1119,7 @@ pub fn compile_site(
         linked_modules: pages
             .iter()
             .flat_map(|p| p.linked_modules.iter().cloned())
-            .chain(
-                chunk_modules
-                    .iter()
-                    .cloned(),
-            )
+            .chain(chunk_modules.iter().cloned())
             .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
             .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
