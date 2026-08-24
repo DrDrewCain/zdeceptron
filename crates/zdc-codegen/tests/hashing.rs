@@ -195,7 +195,62 @@ fn every_routed_document_links_and_records_its_own_stylesheet() {
             page.url
         );
     }
-    assert_eq!(site.immutable.len(), site.pages.len());
+    // The pages' sheets and the program chunk. The chunk earns its place
+    // for the sheets' reason and by the same mechanism: its name carries
+    // a hash of its bytes, so the name changes when they do and a cache
+    // that holds it forever cannot serve a stale one.
+    let expected = site.pages.len() + usize::from(site.program_chunk.is_some());
+    assert_eq!(site.immutable.len(), expected, "{:?}", site.immutable);
+    if let Some(chunk) = &site.program_chunk {
+        assert!(
+            site.immutable.iter().any(|path| path.ends_with(&chunk.name)),
+            "the chunk is named by its bytes, so it may be held: {:?}",
+            site.immutable
+        );
+    }
+}
+
+/// **The one JavaScript file that may be immutable, and why it is not an
+/// exception to the rule below but an instance of it.**
+///
+/// `nothing_reached_by_an_import_carries_a_hash` holds that a hashed file
+/// reached by an `import` needs the specifier that reaches it rewritten,
+/// and that `runtime/*.js` cannot have one because its importers are
+/// files this compiler ships unmodified.
+///
+/// The program chunk is reached by an import and does carry a hash. The
+/// difference is the importer: a page's module is *emitted*, so the
+/// specifier is written at the same moment the name is settled, by the
+/// same code, from the same bytes. There is no file left over that names
+/// it wrongly — which is the whole of what the rule protects against.
+#[test]
+fn the_program_chunk_is_hashed_and_the_pages_name_what_was_written() {
+    let site = routed_site();
+    let Some(chunk) = &site.program_chunk else {
+        panic!("this site shares definitions, so it has a chunk");
+    };
+
+    let mut naming = 0;
+    for page in &site.pages {
+        if page.client_js.contains(&chunk.name) {
+            naming += 1;
+            assert!(
+                page.client_js
+                    .contains(&format!("from './{}'", chunk.name)),
+                "a page names the chunk by the name it was written under:\n{}",
+                page.client_js.lines().take(6).collect::<Vec<_>>().join("\n")
+            );
+        }
+    }
+    assert!(
+        naming > 1,
+        "a chunk exists because more than one page imports it"
+    );
+    assert!(
+        chunk.name.starts_with("program.") && chunk.name.ends_with(".js"),
+        "the hash sits between the two, as the stylesheets' does: {}",
+        chunk.name
+    );
 }
 
 /// The decision, held. A hash on a file reached by an `import` would have
