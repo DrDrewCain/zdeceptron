@@ -18,6 +18,35 @@ fn site_example() -> SiteBundle {
     build(&support::repository_path("examples/site.zd"))
 }
 
+/// The same pipeline as [`build`], from a source string.
+///
+/// For a program small enough to read in the test that uses it. A file
+/// would be a better home for anything larger; this exists because the
+/// case below is *the absence of something*, and the shortest program
+/// that has nothing to share is the clearest statement of it.
+fn build_source(source: &str) -> SiteBundle {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("parse: {}", e.message));
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("resolve: {}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let types = zdc_types::check(&hir, &split)
+        .unwrap_or_else(|errors| panic!("check: {}", errors[0].message));
+    let options = Options::new("site.zd".to_string(), "site");
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &types,
+        cleared,
+    };
+    compile_site(&inputs, &options).unwrap_or_else(|errors| panic!("emit: {}", errors[0].message))
+}
+
 fn build(path: &std::path::Path) -> SiteBundle {
     let linked = zdc_resolve::load(path)
         .unwrap_or_else(|failure| panic!("load: {}", failure.errors[0].message));
@@ -788,5 +817,72 @@ fn the_runtime_every_emitted_module_imports_is_in_the_set_the_writer_copies() {
     assert!(
         checked > 0,
         "no emitted module imports the runtime, so this checked nothing"
+    );
+}
+
+/// **A site whose pages share nothing gets no chunk**, and no page names
+/// one.
+///
+/// The saving is `(copies - 1) x size`, so at one copy there is none: a
+/// chunk holding what a single page reaches would move that page's own
+/// code into a second file and a second request, for nothing. Every
+/// other test here is of a program that *does* share, so this is the
+/// branch none of them reach — and an empty file emitted anyway would be
+/// a 404 waiting for the first page that imported it.
+#[test]
+fn a_site_with_nothing_in_common_emits_no_chunk() {
+    // **Two things this program had to be talked out of.** It gave two
+    // functions returning literals first, and the emitter folded both
+    // into their templates — so neither page reached a definition, the
+    // chunk was empty whatever the threshold was, and the test passed
+    // with the threshold set to one. A function of state cannot be
+    // folded, so there is something to apportion.
+    //
+    // Then both functions read one `count`, which *is* a definition two
+    // pages reach — so the program shared something after all and the
+    // chunk was rightly emitted. A page apiece, and now nothing is.
+    let site = build_source(
+        "route Site\n    \
+         Home  is \"/\"\n    \
+         Other is \"/other\"\n\n\
+         state page is client Option of Site starting address\n\
+         state homeCount is client Whole starting 1\n\
+         state otherCount is client Whole starting 2\n\n\
+         function homeSays of n\n    give \"home \" + (text of (n + 1))\n\n\
+         function otherSays of n\n    give \"other \" + (text of (n + 2))\n\n\
+         view\n    when page\n        None\n            Text \"not found\"\n        \
+         Some with here\n            when here\n                \
+         Home\n                    Column\n                        \
+         Text (homeSays of homeCount)\n                \
+         Other\n                    Column\n                        \
+         Text (otherSays of otherCount)\n",
+    );
+
+    assert!(site.pages.len() > 1, "this program is routed");
+    assert!(
+        site.program_chunk.is_none(),
+        "nothing is reached by two pages, so there is nothing to share"
+    );
+    for page in &site.pages {
+        assert!(
+            !page.client_js.contains("program."),
+            "and no page names a file that was not written:\n{}",
+            page.client_js
+                .lines()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    // Each page still carries its own, which is what makes the absence a
+    // saving rather than a loss.
+    let home = &page(&site, "/").client_js;
+    assert!(
+        home.contains("homeSays"),
+        "the page carries its own:\n{home}"
+    );
+    assert!(
+        !home.contains("otherSays"),
+        "and not the other page's:\n{home}"
     );
 }
