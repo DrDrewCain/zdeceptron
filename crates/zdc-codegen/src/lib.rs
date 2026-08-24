@@ -3008,20 +3008,43 @@ pub fn document_path(url: &str) -> String {
 /// wrong: `zdc build` ships thirty-three pages that each declare their
 /// own helpers and thirty-three browsers that each accept them.
 ///
-/// Matched by whole line and only for a `$`-prefixed name, which is the
-/// prefix §17.4.1 keeps outside XID precisely so no program's own
-/// declaration can be spelled like one.
+/// The helpers are not the only ones. A `static` is declared from what
+/// the emission *read* rather than from the split's member list — the
+/// split makes it an inlined member and inlined members are in no
+/// bundle's list — so the chunk declares `now` because shared code reads
+/// it, and the page declares `now` because its own code does. Two
+/// modules, two scopes, both right. One scope, and the document does not
+/// load.
+///
+/// **Matched by whole line, which is what makes this safe.** A routed
+/// build settles one name table for the whole program, so one spelling
+/// is one definition: two identical `const now = …` lines are the same
+/// `static`, not two that collided. Without that the match would be a
+/// guess, and it is the reason the table was made a program-wide fact
+/// before any of this was written.
 fn without_repeats(page: &str, chunk: &str) -> String {
     let depth_of = |line: &str| {
         let opens = line.matches(['{', '(', '[']).count() as i32;
         let closes = line.matches(['}', ')', ']']).count() as i32;
         opens - closes
     };
+    // The chunk's lines as a set, and not `chunk.contains(line)`. Two
+    // reasons, and the second is the one that matters: a substring search
+    // matches anywhere, so a declaration would count as repeated because
+    // its text happened to occur inside some other line of the chunk. It
+    // is also the difference between one pass over the chunk and one per
+    // declaration of every page.
+    let declared_in_chunk: std::collections::HashSet<&str> = chunk
+        .lines()
+        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .collect();
     let mut out = String::new();
     let mut lines = page.lines();
     while let Some(line) = lines.next() {
-        let declares_a_helper = line.starts_with("const $") || line.starts_with("class $");
-        if declares_a_helper && chunk.contains(line) {
+        let declares = line.starts_with("const ")
+            || line.starts_with("class ")
+            || line.starts_with("function ");
+        if declares && declared_in_chunk.contains(line) {
             // The declaration may run past its first line, so it is
             // followed to its close rather than dropped by the line.
             let mut depth = depth_of(line);
