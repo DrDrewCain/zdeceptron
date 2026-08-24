@@ -735,52 +735,58 @@ fn a_definition_two_pages_reach_is_emitted_once_and_imported() {
     }
 }
 
-/// **What the chunk imports is copied too.**
+/// **What is imported is copied — the chunk included.**
 ///
-/// The runtime set is a union over the documents, and it is what every
+/// `site.runtime` is a union over the documents and it is what every
 /// writer of a bundle copies. Moving a definition into the chunk moves
-/// its runtime import with it — so a module the chunk reaches and no page
-/// reaches any more was copied for nobody. The chunk then imported a file
-/// that was not there, and every page that imports the chunk failed to
-/// load with it, while `zdc build` reported nothing at all.
+/// its runtime import with it, so a module the chunk reaches and no page
+/// reaches any more would be copied for nobody: the chunk would import a
+/// file that is not there, and every page importing the chunk would fail
+/// to load with it while `zdc build` reported nothing.
+///
+/// Asked of every emitted module rather than of the chunk alone. The
+/// chunk of *this* program imports no runtime — it holds two pure text
+/// functions — so a check that looked only there would pass without
+/// looking at anything, which is what the first version of this test did
+/// until its own guard said so. The pages always import runtime, so the
+/// walk has something to walk, and the chunk is included wherever it has
+/// imports of its own.
 #[test]
-fn the_runtime_the_chunk_imports_is_in_the_set_the_writer_copies() {
+fn the_runtime_every_emitted_module_imports_is_in_the_set_the_writer_copies() {
     let site = site_example();
     let chunk = site
         .program_chunk
         .as_ref()
-        .expect("this program emits a chunk");
+        .map(|chunk| chunk.client_js.as_str());
+    let modules = site
+        .pages
+        .iter()
+        .map(|page| page.client_js.as_str())
+        .chain(chunk);
 
     let mut checked = 0;
-    for line in chunk.client_js.lines() {
-        let Some(rest) = line.strip_prefix("import ") else {
-            continue;
-        };
-        let Some(from) = rest.split(" from ").nth(1) else {
-            continue;
-        };
-        let specifier = from.trim().trim_matches(|c| c == '\'' || c == ';');
-        let Some(module) = specifier.strip_prefix("../runtime/") else {
-            continue;
-        };
-        checked += 1;
-        assert!(
-            site.runtime.iter().any(|named| named.ends_with(module)),
-            "the chunk imports `{module}`, which nothing would copy: {:?}",
-            site.runtime
-        );
+    for source in modules {
+        for line in source.lines() {
+            let Some(rest) = line.strip_prefix("import ") else {
+                continue;
+            };
+            let Some(from) = rest.split(" from ").nth(1) else {
+                continue;
+            };
+            let specifier = from.trim().trim_matches(|c| c == '\'' || c == ';');
+            let Some(module) = specifier.strip_prefix("../runtime/") else {
+                continue;
+            };
+            checked += 1;
+            assert!(
+                site.runtime.iter().any(|named| named.ends_with(module)),
+                "`{module}` is imported and nothing would copy it: {:?}",
+                site.runtime
+            );
+        }
     }
-    // Without this the test passes on a chunk that imports nothing, which
-    // is the shape of the fault it exists for: `clock.js` went missing
-    // because a definition *moved* and took its import with it.
     assert!(
         checked > 0,
-        "the chunk imports no runtime at all, so this checked nothing:\n{}",
-        chunk
-            .client_js
-            .lines()
-            .take(8)
-            .collect::<Vec<_>>()
-            .join("\n")
+        "no emitted module imports the runtime, so this checked nothing"
     );
 }
