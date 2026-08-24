@@ -76,7 +76,7 @@ fn build(path: &std::path::Path) -> SiteBundle {
 /// and resolves the import; these tests have no module loader, so they
 /// are handed both concatenated, which is what `prerender` does for the
 /// same reason.
-fn program<'a>(site: &'a SiteBundle, url: &str) -> String {
+fn program(site: &SiteBundle, url: &str) -> String {
     match &site.program_chunk {
         Some(chunk) => format!("{}\n{}", chunk.client_js, page(site, url).client_js),
         None => page(site, url).client_js.clone(),
