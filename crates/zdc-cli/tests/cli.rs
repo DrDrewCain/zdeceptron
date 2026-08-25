@@ -670,6 +670,98 @@ fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
     );
 }
 
+/// **The assertion that reached `report.json` through no other door.**
+///
+/// This program's `foreign` claims nothing about its result, so it awards
+/// no grant and `asserted` is empty — and until the placement was
+/// collected, that emptiness was the whole report. `spin` asks for
+/// somebody's JavaScript in both bundles and appeared nowhere.
+#[test]
+fn build_report_writes_the_placement_of_a_foreign_that_asserts_nothing_else() {
+    let workspace = TempDir::new("build-report-anywhere-src");
+    std::fs::create_dir_all(&workspace.path).expect("a temporary project directory");
+    std::fs::write(
+        workspace.path.join("spin.js"),
+        "export function spin() {\n  return 4;\n}\n",
+    )
+    .expect("the foreign module");
+
+    let entry = workspace.path.join("app.zd");
+    std::fs::write(
+        &entry,
+        "foreign spin is anywhere\n    \
+         from \"./spin.js\" as \"spin\"\n    \
+         gives Whole\n\n\
+         state n is client Whole starting 0\n\n\
+         view title is \"Spin\"\n    Column\n        \
+         Button \"spin\"\n            on click\n                \
+         set n to (spin)\n        Text (text of n)\n",
+    )
+    .expect("the entry file");
+
+    let out = TempDir::new("build-report-anywhere-out");
+    let output = run(&[
+        "build",
+        entry.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+        "--report",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let text = std::fs::read_to_string(out.path.join("report.json")).expect("dist/report.json");
+    let report: serde_json::Value = serde_json::from_str(&text).expect("report.json is JSON");
+
+    assert!(
+        report["asserted"]
+            .as_array()
+            .expect("an `asserted` array")
+            .is_empty(),
+        "`gives Whole` awards no grant:\n{text}"
+    );
+    let anywhere = report["anywhere"].as_array().expect("an `anywhere` array");
+    assert_eq!(
+        anywhere.len(),
+        1,
+        "and the placement is still an assertion a reviewer must read:\n{text}"
+    );
+    assert_eq!(anywhere[0]["name"], "spin");
+    assert_eq!(anywhere[0]["from"], "./spin.js");
+    assert_eq!(anywhere[0]["primitive"], false);
+    assert_eq!(
+        anywhere[0]["declaredAt"]["line"], 1,
+        "a reviewer is sent to the line carrying the claim:\n{text}"
+    );
+    assert_eq!(
+        anywhere[0]["calls"]
+            .as_array()
+            .expect("a `calls` array")
+            .len(),
+        1,
+        "with the one call that makes it load-bearing:\n{text}"
+    );
+
+    // A placement awards no authority, so no `release` rests on one and
+    // the key that answers *which declassification does this let compile*
+    // would be answering about the wrong lattice.
+    assert!(
+        anywhere[0].get("reachedByReleases").is_none(),
+        "an `anywhere` entry claims nothing about declassification:\n{text}"
+    );
+    assert!(
+        !report["library"]["anywhere"]
+            .as_array()
+            .expect("the prelude's placements")
+            .is_empty(),
+        "the prelude asserts its own, and they are held apart:\n{text}"
+    );
+}
+
 /// The flag is a flag: a plain `zdc build` writes a bundle a browser loads
 /// and nothing else. A review artifact in every `dist/` is a review
 /// artifact nobody asked for and a file a static host would serve.
