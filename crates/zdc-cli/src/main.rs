@@ -945,6 +945,29 @@ fn build(file: &Path, out: &Path, want_report: bool) -> ExitCode {
     for (path, contents) in &maps {
         files.push((path.clone(), contents.as_str()));
     }
+    // The program's own code, once, beside the pages that import it. Its
+    // map is rendered here rather than with the pages' because it names a
+    // file none of them do.
+    let chunk_map = site.program_chunk.as_ref().map(|chunk| {
+        (
+            out.join("pages").join(&chunk.map_name),
+            zdc_codegen::sourcemap::render(
+                &chunk.name,
+                &chunk.mappings,
+                &sources,
+                zdc_codegen::sourcemap::Content::Omit,
+            ),
+        )
+    });
+    if let Some(chunk) = &site.program_chunk {
+        files.push((
+            out.join("pages").join(&chunk.name),
+            chunk.client_js.as_str(),
+        ));
+    }
+    if let Some((path, contents)) = &chunk_map {
+        files.push((path.clone(), contents.as_str()));
+    }
     for page in &site.pages {
         if routed {
             // A module with no `view` is never routed, so a routed page

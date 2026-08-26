@@ -522,6 +522,23 @@ pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
 /// code to every visitor has forfeited it. The split is not a bundler
 /// pass bolted on afterwards — it falls out of the address fold, because
 /// a document whose route is known reaches only the arm it renders.
+/// The program's own code, written once and imported by every page that
+/// reaches it.
+///
+/// Named by content hash for the reason the stylesheets are (#137): the
+/// pages name it in an `import`, so the name and the bytes are settled
+/// together or a stale copy is served under a live name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramChunk {
+    /// `program.<hash>.js`, relative to `pages/`.
+    pub name: String,
+    pub client_js: String,
+    pub mappings: Vec<sourcemap::Mapping>,
+    pub map_name: String,
+    /// How many definitions it holds, for the build report to say.
+    pub definitions: usize,
+}
+
 pub struct PageBundle {
     /// The `foreign` modules this page's `client_js` imports by relative
     /// path (#223). Same contract as [`Bundle::linked_modules`].
@@ -579,6 +596,13 @@ pub struct SiteBundle {
     /// has to land (#223). Same contract as [`Bundle::linked_modules`].
     pub linked_modules: BTreeSet<LinkedModule>,
     pub pages: Vec<PageBundle>,
+    /// The program's own code, emitted once for the pages to import.
+    ///
+    /// `None` when nothing is worth sharing — a site whose routes have no
+    /// definition in common, which a two-page program easily is. The
+    /// pages then carry what they always did and no empty file is
+    /// written.
+    pub program_chunk: Option<ProgramChunk>,
     /// URL to module, for a host that has to answer a request without
     /// running the compiler.
     pub routes_json: String,
@@ -673,12 +697,16 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         // comparison in `mark_current_page` a fact rather than a guess.
         None,
         &shared,
+        // An unrouted program emits one document, so its table has nobody
+        // to agree with and is settled where it is used.
+        None,
+        None,
     )?;
 
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
     let painted = (options.first_paint && nodes.is_some())
-        .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+        .then(|| painted_markup(&emitted.client_js, &emitted.runtime, None))
         .flatten();
     // The name the document links and the name the file is written under,
     // computed once (#137). The stylesheet's bytes are settled by now, so
@@ -761,6 +789,8 @@ pub fn compile_site(
             styles_path: bundle.styles_path.clone(),
         };
         return Ok(SiteBundle {
+            // One document has nobody to share with.
+            program_chunk: None,
             pages: vec![PageBundle {
                 linked_modules: bundle.linked_modules.clone(),
                 url: "/".to_string(),
@@ -795,6 +825,103 @@ pub fn compile_site(
     // fixpoint per page would make it cubic, which is the one thing that
     // would bite at a realistic page count.
     let shared = Shared::new(hir, inputs.table);
+    let program_names = whole_program_names(inputs, &shared);
+
+    // **What every document reaches, before any of them is written.**
+    //
+    // A route's bundle used to be emitted whole, which is correct and is
+    // why the portfolio ships the same 427 KB thirty-three times: a
+    // reader really can press `~` on a blog post and launch any game, so
+    // every route really does reach every game. Nothing about the program
+    // is wrong. What is wrong is writing the same bytes once per route.
+    let reached: Vec<BTreeSet<DefId>> = site
+        .pages
+        .iter()
+        .map(|page| {
+            let specialised = pages::specialise(hir, &nodes, page);
+            let analysis = Analysis::page(hir, &specialised.nodes, &specialised.bindings, &shared);
+            reachable_members(hir, inputs.split, &analysis, Layout::Page)
+        })
+        .collect();
+    // Held by more than one document — the threshold, and it is the
+    // lowest one that can pay. A definition two pages reach is written
+    // twice today and once if it moves, so the chunk is never larger than
+    // the copies it replaces. Sharing at *three* would leave real
+    // duplication behind for no benefit, and sharing at one would move a
+    // page's private code away from it for none either.
+    let mut holders: BTreeMap<DefId, usize> = BTreeMap::new();
+    for members in &reached {
+        for id in members {
+            *holders.entry(*id).or_default() += 1;
+        }
+    }
+    let program_chunk: BTreeSet<DefId> = holders
+        .into_iter()
+        .filter(|(_, holders)| *holders > 1)
+        .map(|(id, _)| id)
+        .collect();
+
+    // The chunk itself, emitted as what it is: a document with no view.
+    // That is already a shape this compiler knows — a `use "./x" for …`
+    // module is emitted with its definitions exported — so nothing new
+    // decides how a definition is written, only where it lands.
+    let chunk = if program_chunk.is_empty() {
+        None
+    } else {
+        let emitted = emit(
+            inputs,
+            options,
+            None,
+            &Bindings::default(),
+            Layout::Chunk,
+            None,
+            &shared,
+            Some(&program_names),
+            Some(&Apportion {
+                carried: &program_chunk,
+                imported: &BTreeSet::new(),
+                from: "",
+            }),
+        )?;
+        let name = hash::hashed_name("program.js", emitted.client_js.as_bytes());
+        Some((name, emitted))
+    };
+    // **The runtime the chunk reaches, which may be runtime no page
+    // reaches any more.** The set every writer copies is a union over the
+    // documents, and moving a definition into the chunk moves its runtime
+    // import with it: the portfolio's games call `everyFrame`, so
+    // `clock.js` left every page at once and was copied for nobody. The
+    // chunk then imported a file that was not there, the module failed to
+    // load, and with it every page that imports the chunk — which is all
+    // of them.
+    let chunk_runtime: BTreeSet<&'static str> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.runtime.clone())
+        .unwrap_or_default();
+    let chunk_modules: BTreeSet<LinkedModule> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.linked_modules.clone())
+        .unwrap_or_default();
+    // The same for what it reaches over the network: the manifest
+    // describes the program, and a chunk is part of the program.
+    let chunk_remote: BTreeSet<String> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.remote_origins.clone())
+        .unwrap_or_default();
+    let chunk_connect: BTreeSet<String> = chunk
+        .as_ref()
+        .map(|(_, emitted)| emitted.connect_origins.clone())
+        .unwrap_or_default();
+    let chunk_specifier = chunk
+        .as_ref()
+        // A page and the chunk sit in the same directory, so the page
+        // names it beside itself. Not root-absolute like the stylesheet:
+        // that is `<link>`ed from a document at `/writing/<slug>/`, while
+        // this is imported by a module the browser already fetched from
+        // `/pages/`, and a relative specifier there resolves against the
+        // module rather than against the page's URL.
+        .map(|(name, _)| format!("./{name}"))
+        .unwrap_or_default();
     let mut pages = Vec::with_capacity(site.pages.len());
     let mut errors = Vec::new();
     let mut index = Vec::new();
@@ -817,8 +944,19 @@ pub fn compile_site(
     // document, because a page that declares no request must carry the
     // narrower one.
     let mut connect_origins: BTreeSet<String> = BTreeSet::new();
-    for page in &site.pages {
+    for (nth, page) in site.pages.iter().enumerate() {
         let specialised = pages::specialise(hir, &nodes, page);
+        // What this page keeps, and what it now reads from the chunk. The
+        // two partition what it reaches, so nothing is dropped and
+        // nothing is written twice.
+        let carried: BTreeSet<DefId> = reached[nth].difference(&program_chunk).copied().collect();
+        let imported: BTreeSet<DefId> =
+            reached[nth].intersection(&program_chunk).copied().collect();
+        let apportion = chunk.as_ref().map(|_| Apportion {
+            carried: &carried,
+            imported: &imported,
+            from: &chunk_specifier,
+        });
         let module = format!("/pages/{}.js", page.slug);
         let boot = format!("/pages/{}.boot.js", page.slug);
         match emit(
@@ -829,6 +967,8 @@ pub fn compile_site(
             Layout::Page,
             Some(&page.url),
             &shared,
+            Some(&program_names),
+            apportion.as_ref(),
         ) {
             Ok(emitted) => {
                 if page.variant.is_none() {
@@ -852,7 +992,23 @@ pub fn compile_site(
                 // Before the fields move: the prerender reads two of them.
                 let painted = options
                     .first_paint
-                    .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+                    .then(|| {
+                        // The union, and for the reason the writer needs
+                        // one: the paint runs the chunk too, and the
+                        // chunk's runtime is exactly what this page's
+                        // set no longer names. Handing the page's alone
+                        // leaves `everyFrame` undeclared in the sandbox,
+                        // which is a `ReferenceError`, which is a first
+                        // paint silently not taken — the same fault as
+                        // the missing file, one layer in.
+                        let mut reached = emitted.runtime.clone();
+                        reached.extend(chunk_runtime.iter().copied());
+                        painted_markup(
+                            &emitted.client_js,
+                            &reached,
+                            chunk.as_ref().map(|(_, chunk)| chunk.client_js.as_str()),
+                        )
+                    })
                     .flatten();
                 // As in `compile`: the name in the document and the name
                 // on disk are one string, settled once the stylesheet's
@@ -931,13 +1087,39 @@ pub fn compile_site(
     // well as its hash, so two pages never collide here; the `dedup` is
     // for the caller's benefit, which merges this with the asset walk's
     // list and should not have to think about it.
+    runtime.extend(chunk_runtime.iter().copied());
+    remote_origins.extend(chunk_remote);
+    connect_origins.extend(chunk_connect);
     let mut immutable: Vec<String> = pages.iter().map(|page| page.styles_path.clone()).collect();
+    // The chunk carries a content hash in its name for the same reason a
+    // stylesheet does, so it earns the same answer from a cache: the name
+    // changes when the bytes do, and a name that cannot go stale can be
+    // held forever (#137).
+    if let Some((name, _)) = &chunk {
+        immutable.push(format!("pages/{name}"));
+    }
     immutable.sort();
     immutable.dedup();
     Ok(SiteBundle {
+        program_chunk: chunk.map(|(name, emitted)| {
+            let map_name = format!("{name}.map");
+            ProgramChunk {
+                client_js: emitted.client_js + &sourcemap::trailer(&map_name),
+                mappings: emitted.mappings,
+                map_name,
+                name,
+                definitions: program_chunk.len(),
+            }
+        }),
+        // The chunk's, as well as the pages'. A `foreign` called from a
+        // shared function has its `import` in the chunk now, so the file
+        // it names is one the *chunk* asks for — and a module nobody
+        // asked for is a module nobody copies, which is a bundle whose
+        // first import 404s.
         linked_modules: pages
             .iter()
             .flat_map(|p| p.linked_modules.iter().cloned())
+            .chain(chunk_modules.iter().cloned())
             .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
             .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
@@ -987,13 +1169,24 @@ enum Layout {
     /// `dist/pages/<slug>.js`, one directory below the site root, with
     /// the runtime shared by every page.
     Page,
+    /// `dist/pages/program.<hash>.js` — the program's own code, once,
+    /// for the pages beside it to import.
+    ///
+    /// A document, in every way the emission cares about, except that it
+    /// renders nothing: it has no `view` root, so it is a *module* and
+    /// its definitions come out exported, which is the same shape a
+    /// `use "./x" for …` file has always been emitted in. What it is
+    /// not is a page — it must not narrow its members to what some view
+    /// reaches, because the whole point is that it holds what several
+    /// views reach between them.
+    Chunk,
 }
 
 impl Layout {
     fn runtime(self) -> &'static str {
         match self {
             Layout::Single => "./runtime",
-            Layout::Page => "../runtime",
+            Layout::Page | Layout::Chunk => "../runtime",
         }
     }
 }
@@ -1106,8 +1299,92 @@ fn page_title(options: &Options, metadata: &Metadata, url: &str) -> String {
     format!("{base} · {url}")
 }
 
+/// How a routed build divides the program between one shared chunk and
+/// the documents that import it.
+///
+/// The split (#136) already proved the mechanism on the *runtime*: 13
+/// modules sit in `runtime/` and every route imports them, 34 KB once.
+/// The program's own code got no such treatment — a route's bundle was
+/// emitted whole, so anything reachable from the shell was written again
+/// per route. On `~/zdc-portfolio` that is 782 definitions and 427 KB
+/// copied thirty-three times.
+struct Apportion<'a> {
+    /// What this document writes out itself.
+    carried: &'a BTreeSet<DefId>,
+    /// What it reads from the chunk instead. Never everything the chunk
+    /// holds: a document imports the names it reaches, so the import
+    /// clause stays proportional to the page rather than to the site.
+    imported: &'a BTreeSet<DefId>,
+    /// The chunk's specifier, as this document must write it.
+    from: &'a str,
+}
+
+/// What a document reaches, before anything decides what it should carry.
+///
+/// Lifted out of [`emit`] so a routed build can ask the question of every
+/// page before emitting any of them: two documents cannot be given one
+/// shared chunk until something has compared what each of them needs.
+fn reachable_members(
+    hir: &Hir,
+    split: &TierSplit,
+    analysis: &Analysis,
+    layout: Layout,
+) -> BTreeSet<DefId> {
+    // The split proved what the program's own code reaches. It could not
+    // prove what a type-directed operator reaches, because the checker had
+    // not run yet, so that part of the closure is added here — seeded from
+    // this root's own members, so the bundle grows only by what it can
+    // actually reach (§17.4.5).
+    let mut members = split.client_members();
+    members.extend(analysis.operator_closure(hir, &members));
+    // A document reaches only the arm it renders, so the page walk
+    // *narrows* the split's answer. It never widens it: the intersection
+    // cannot readmit a definition the split stopped at, which is what
+    // keeps §14A.1's exclusion an exclusion.
+    if layout == Layout::Page {
+        members.retain(|id| analysis.client_closure().contains(id));
+    }
+    // A module with no `view` has no root for the split to walk from, so
+    // the split names nothing and the module would come out empty. Its
+    // use is the importing file's `for` list, which is outside this
+    // compilation unit — so §14D.2's rule applies instead: every
+    // top-level declaration is importable, and the walk seeds from all of
+    // them. Nothing crosses a boundary here, because a module with no
+    // view has no client for anything to cross to.
+    if hir.view.is_none() {
+        members.extend(analysis.client_closure().iter().copied());
+    }
+    members
+}
+
+/// The name table a routed program's documents all read from.
+///
+/// Built from the whole program — [`Analysis::whole`] and the split's
+/// client root, the same pair an unrouted build uses — so it does not
+/// depend on which page asked. That is what lets one definition be
+/// emitted once and imported by thirty-three documents: they agree on
+/// what it is called because none of them chose the name.
+fn whole_program_names(inputs: &Inputs<'_>, shared: &Shared) -> Names {
+    let hir = inputs.hir;
+    let analysis = Analysis::whole(hir, shared);
+    let mut members = inputs.split.client_members();
+    members.extend(analysis.operator_closure(hir, &members));
+    if hir.view.is_none() {
+        members.extend(analysis.client_closure().iter().copied());
+    }
+    Names::new(hir, &analysis, &members)
+}
+
 /// One document: its module, its stylesheet, and the server halves the
 /// split derived from the program it belongs to.
+///
+/// Nine arguments, which is two past the lint's taste and is the shape of
+/// the thing: a document is what the program, the options, a node slice,
+/// its bindings, a layout, a URL, the shared analysis, a name table and a
+/// member set jointly determine. Grouping some of them into a struct
+/// would name a thing with no other use, and would hide which of them a
+/// routed build supplies and an unrouted one leaves to `emit`.
+#[allow(clippy::too_many_arguments)]
 fn emit(
     inputs: &Inputs<'_>,
     options: &Options,
@@ -1121,6 +1398,33 @@ fn emit(
     // knows which one this is.
     page_url: Option<&str>,
     shared: &Shared,
+    // The program's name table, when the caller has one.
+    //
+    // **A name is a property of the program and not of the document it is
+    // read in.** `Names::new` already allocates from `hir.defs` rather
+    // than from a document's members, which is why the same definition
+    // comes out spelled the same way in every one of a routed program's
+    // bundles — but not quite: a written `Signal` is given a setter only
+    // if *this* document reaches it, and `fresh` mutates the arena both
+    // passes draw from. So a signal written on one page and not another
+    // can shift a later name on one side alone.
+    //
+    // Nothing depended on that while every bundle was emitted whole. A
+    // shared chunk makes it load-bearing — two documents importing one
+    // definition must agree on what it is called — so a routed build
+    // settles the table once and hands the same one to every page.
+    names: Option<&Names>,
+    // The definitions this document is to carry, when the caller is
+    // apportioning them rather than letting each document take everything
+    // it reaches.
+    //
+    // A routed program's documents overlap almost entirely — every route
+    // of the portfolio reaches every game, because the shell can launch
+    // one — so *what it reaches* and *what it should carry* stop being
+    // the same question once a chunk exists for them to share. `None`
+    // keeps the old answer, which is the only answer an unrouted program
+    // has.
+    apportion: Option<&Apportion<'_>>,
 ) -> Result<Emitted, Vec<CodegenError>> {
     let hir = inputs.hir;
     let split = inputs.split;
@@ -1129,40 +1433,31 @@ fn emit(
     let roots = nodes.unwrap_or(&[]);
     let statics = statics_by_def(hir, &options.statics);
     let analysis = match layout {
-        Layout::Single => Analysis::whole(hir, shared),
+        Layout::Single | Layout::Chunk => Analysis::whole(hir, shared),
         Layout::Page => Analysis::page(hir, roots, bindings, shared),
     };
 
-    // The split proved what the program's own code reaches. It could not
-    // prove what a type-directed operator reaches, because the checker had
-    // not run yet, so that part of the closure is added here — seeded from
-    // this root's own members, so the bundle grows only by what it can
-    // actually reach (§17.4.5).
-    let mut client_members = split.client_members();
-    client_members.extend(analysis.operator_closure(hir, &client_members));
-    // A document reaches only the arm it renders, so the page walk
-    // *narrows* the split's answer. It never widens it: the intersection
-    // cannot readmit a definition the split stopped at, which is what
-    // keeps §14A.1's exclusion an exclusion.
-    if layout == Layout::Page {
-        client_members.retain(|id| analysis.client_closure().contains(id));
-    }
-    // A module with no `view` has no root for the split to walk from, so
-    // the split names nothing and the module would come out empty. Its
-    // use is the importing file's `for` list, which is outside this
-    // compilation unit — so §14D.2's rule applies instead: every
-    // top-level declaration is importable, and the walk seeds from all of
-    // them. Nothing crosses a boundary here, because a module with no
-    // view has no client for anything to cross to.
-    if hir.view.is_none() {
-        client_members.extend(analysis.client_closure().iter().copied());
+    let mut client_members = reachable_members(hir, split, &analysis, layout);
+
+    // What the chunk holds, this document does not write out. It still
+    // *reaches* those definitions — the retain below is what keeps the
+    // reference and the definition from both landing here.
+    if let Some(apportion) = apportion {
+        client_members.retain(|id| apportion.carried.contains(id));
     }
 
-    let names = Names::new(hir, &analysis, &client_members);
+    let own_names;
+    let names = match names {
+        Some(names) => names,
+        None => {
+            own_names = Names::new(hir, &analysis, &client_members);
+            &own_names
+        }
+    };
     let mut emitter = Emitter {
         hir,
         types: table,
-        names: &names,
+        names,
         analysis: &analysis,
         bindings,
         used: RuntimeImports::default(),
@@ -1214,7 +1509,7 @@ fn emit(
         let mut server_emitter = Emitter {
             hir,
             types: table,
-            names: &names,
+            names,
             analysis: &analysis,
             bindings,
             used: RuntimeImports::default(),
@@ -1228,13 +1523,7 @@ fn emit(
             media: BTreeMap::new(),
             scroll: false,
         };
-        let served = emit_server(
-            hir,
-            split,
-            &names,
-            &mut server_emitter,
-            &options.source_path,
-        );
+        let served = emit_server(hir, split, names, &mut server_emitter, &options.source_path);
         emitter.errors.extend(server_emitter.errors);
         (served, server_emitter.used.foreign)
     };
@@ -1398,6 +1687,36 @@ fn emit(
             js::string(&format!("{runtime_root}/vector.js"))
         ));
     }
+    // The shared chunk, before the program's own foreigns and after the
+    // runtime — the order the rest of this block already reads in, and
+    // the order a person debugging a bundle expects: the language's, then
+    // the program's, then the outside world's.
+    //
+    // Only what this document reaches. A route that never renders the
+    // terminal still reaches every game through it, so this is not a
+    // small set on the portfolio — but it is the page's set and not the
+    // site's, and a page of a different program will differ.
+    if let Some(apportion) = apportion {
+        let mut wanted: Vec<&str> = Vec::new();
+        for id in apportion.imported {
+            wanted.push(names.def(*id));
+            if let Some(setter) = names.setter(*id) {
+                wanted.push(setter);
+            }
+        }
+        // By name rather than by `DefId`, so the clause reads the same
+        // whichever order the walk found them in and a diff of two builds
+        // shows only what moved.
+        wanted.sort_unstable();
+        wanted.dedup();
+        if !wanted.is_empty() {
+            client_js.push_str(&format!(
+                "import {{ {} }} from {};\n",
+                wanted.join(", "),
+                js::string(apportion.from)
+            ));
+        }
+    }
     // §14E: a foreign the emission actually called. The export is a
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
@@ -1462,7 +1781,7 @@ fn emit(
                     // directories down, so a relative target would resolve
                     // against that URL instead. Root-absolute is what the
                     // page's own module and stylesheet already use.
-                    Layout::Page => format!("/{destination}"),
+                    Layout::Page | Layout::Chunk => format!("/{destination}"),
                 }
             }
             None => target.clone(),
@@ -1594,12 +1913,12 @@ fn emit(
         // file it has always had — see `Styles::generated`.
         styles_css: match layout {
             Layout::Single => styles.stylesheet(),
-            Layout::Page => styles.generated(),
+            Layout::Page | Layout::Chunk => styles.generated(),
         },
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,
         functions: server,
-        names,
+        names: names.clone(),
     })
 }
 
@@ -2667,8 +2986,89 @@ pub fn document_path(url: &str) -> String {
 /// shipped before this existed, and none of them is a reason to refuse
 /// the program. The client builds the same tree either way, which is
 /// what makes skipping it safe.
+/// `page`, without the declarations `chunk` already makes.
+///
+/// §17.4.7's primitive layer is *inlined* rather than imported — each
+/// module that reaches `$textOf` writes its own — and in a browser that
+/// is right: two modules are two scopes, and each gets its own copy of a
+/// three-line arrow function. The paint puts every module in one scope,
+/// where a second `const $textOf` is not a duplicate but a `SyntaxError`,
+/// and the whole document fails to load rather than painting wrong.
+///
+/// So the repeat is dropped here, in the one place the two scopes become
+/// one, and the emitted bundles are left as they are. They are not
+/// wrong: `zdc build` ships thirty-three pages that each declare their
+/// own helpers and thirty-three browsers that each accept them.
+///
+/// The helpers are not the only ones. A `static` is declared from what
+/// the emission *read* rather than from the split's member list — the
+/// split makes it an inlined member and inlined members are in no
+/// bundle's list — so the chunk declares `now` because shared code reads
+/// it, and the page declares `now` because its own code does. Two
+/// modules, two scopes, both right. One scope, and the document does not
+/// load.
+///
+/// **Matched by whole line, which is what makes this safe.** A routed
+/// build settles one name table for the whole program, so one spelling
+/// is one definition: two identical `const now = …` lines are the same
+/// `static`, not two that collided. Without that the match would be a
+/// guess, and it is the reason the table was made a program-wide fact
+/// before any of this was written.
+fn without_repeats(page: &str, chunk: &str) -> String {
+    let depth_of = |line: &str| {
+        let opens = line.matches(['{', '(', '[']).count() as i32;
+        let closes = line.matches(['}', ')', ']']).count() as i32;
+        opens - closes
+    };
+    // The chunk's lines as a set, and not `chunk.contains(line)`. Two
+    // reasons, and the second is the one that matters: a substring search
+    // matches anywhere, so a declaration would count as repeated because
+    // its text happened to occur inside some other line of the chunk. It
+    // is also the difference between one pass over the chunk and one per
+    // declaration of every page.
+    let declared_in_chunk: std::collections::HashSet<&str> = chunk
+        .lines()
+        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .collect();
+    let mut out = String::new();
+    let mut lines = page.lines();
+    while let Some(line) = lines.next() {
+        let declares = line.starts_with("const ")
+            || line.starts_with("class ")
+            || line.starts_with("function ");
+        if declares && declared_in_chunk.contains(line) {
+            // The declaration may run past its first line, so it is
+            // followed to its close rather than dropped by the line.
+            let mut depth = depth_of(line);
+            while depth > 0 {
+                match lines.next() {
+                    Some(line) => depth += depth_of(line),
+                    None => break,
+                }
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(feature = "evaluate")]
-fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<String> {
+fn painted_markup(
+    client_js: &str,
+    runtime: &BTreeSet<&'static str>,
+    // The shared chunk, when this document imports one.
+    //
+    // Without it the paint is not merely wrong, it is *silently absent*:
+    // `flattened` drops the `import` line, the page's code then calls a
+    // name nothing in the scope declares, and the `ReferenceError` at
+    // load becomes the `None` this function is allowed to return. A
+    // routed program went on building and its documents quietly stopped
+    // arriving painted — which is exactly the failure `flattened`'s own
+    // comment was written about, one module further out.
+    chunk: Option<&str>,
+) -> Option<String> {
     // Development sources, assertions and all: a prerender that tripped
     // one is a prerender whose answer was wrong, and this is the one
     // place a build can find that out before a reader does.
@@ -2685,13 +3085,21 @@ fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<S
     // `zdc build` there and nowhere else — while `zdc check`, which skips
     // the paint, reported nothing, so the two disagreed about a program
     // they are supposed to agree about.
+    // Prepended rather than passed as another linked module, because the
+    // order is known here and need not be inferred: the chunk holds what
+    // the page reads, so it is loaded first, exactly as the runtime is
+    // loaded before both.
+    let program = match chunk {
+        Some(chunk) => format!("{chunk}\n{}", without_repeats(client_js, chunk)),
+        None => client_js.to_string(),
+    };
     evaluate::on_a_deep_stack(|| {
-        prerender::prerender(client_js, &linked).map(|painted| painted.html)
+        prerender::prerender(&program, &linked).map(|painted| painted.html)
     })
 }
 
 #[cfg(not(feature = "evaluate"))]
-fn painted_markup(_: &str, _: &BTreeSet<&'static str>) -> Option<String> {
+fn painted_markup(_: &str, _: &BTreeSet<&'static str>, _: Option<&str>) -> Option<String> {
     None
 }
 

@@ -18,6 +18,35 @@ fn site_example() -> SiteBundle {
     build(&support::repository_path("examples/site.zd"))
 }
 
+/// The same pipeline as [`build`], from a source string.
+///
+/// For a program small enough to read in the test that uses it. A file
+/// would be a better home for anything larger; this exists because the
+/// case below is *the absence of something*, and the shortest program
+/// that has nothing to share is the clearest statement of it.
+fn build_source(source: &str) -> SiteBundle {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("parse: {}", e.message));
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("resolve: {}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let types = zdc_types::check(&hir, &split)
+        .unwrap_or_else(|errors| panic!("check: {}", errors[0].message));
+    let options = Options::new("site.zd".to_string(), "site");
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &types,
+        cleared,
+    };
+    compile_site(&inputs, &options).unwrap_or_else(|errors| panic!("emit: {}", errors[0].message))
+}
+
 fn build(path: &std::path::Path) -> SiteBundle {
     let linked = zdc_resolve::load(path)
         .unwrap_or_else(|failure| panic!("load: {}", failure.errors[0].message));
@@ -65,6 +94,22 @@ fn build(path: &std::path::Path) -> SiteBundle {
                 .join("\n")
         )
     })
+}
+
+/// A document's module *and* the chunk it reads from, in load order.
+///
+/// A page used to be the whole of what a browser ran. It is not any
+/// more: the definitions more than one route reaches are emitted once
+/// into `pages/program.<hash>.js` and imported, so running a page's
+/// module alone calls names nothing declared. The browser is handed both
+/// and resolves the import; these tests have no module loader, so they
+/// are handed both concatenated, which is what `prerender` does for the
+/// same reason.
+fn program(site: &SiteBundle, url: &str) -> String {
+    match &site.program_chunk {
+        Some(chunk) => format!("{}\n{}", chunk.client_js, page(site, url).client_js),
+        None => page(site, url).client_js.clone(),
+    }
 }
 
 fn page<'a>(site: &'a SiteBundle, url: &str) -> &'a PageBundle {
@@ -158,17 +203,34 @@ fn one_pages_code_is_not_in_another_pages_bundle() {
 #[test]
 fn a_shared_helper_is_shared_whole_rather_than_specialised() {
     let site = site_example();
-    let routing = &page(&site, "/writing/routing").client_js;
+    // **Where it lives moved; what it is did not.** The helper is
+    // reached by both entry documents, so it is emitted once into the
+    // chunk rather than specialised into each — and it is still emitted
+    // *whole*, with the branch this page does not take. That is the
+    // claim: a shared definition is not narrowed to its caller.
+    let shared = program(&site, "/writing/routing");
     assert!(
-        routing.contains("An immutable signal has one value"),
-        "the shared helper's other branch is part of the helper:\n{routing}"
+        shared.contains("An immutable signal has one value"),
+        "the shared helper's other branch is part of the helper:\n{shared}"
     );
     assert!(
         !page(&site, "/")
             .client_js
             .contains("An immutable signal has one value"),
-        "but a page that never calls it does not carry it"
+        "and a page that never calls it does not carry it in its own module"
     );
+    // What the chunk costs, said out loud rather than left implied: the
+    // home page does not *carry* the helper and does still *fetch* it,
+    // because the chunk is one file. §16.3.1's claim is about what a
+    // document is emitted with, and that is what is asserted above.
+    if let Some(chunk) = &site.program_chunk {
+        assert!(
+            chunk
+                .client_js
+                .contains("An immutable signal has one value"),
+            "the definition two pages reach is in the file they share"
+        );
+    }
 }
 
 /// §14G.2 revision 1's second consequence: the parameter is a constant
@@ -324,9 +386,8 @@ serialize($host)
         ("/404", "That URL is not part of this site."),
     ];
     for (url, needle) in expected {
-        let page = page(&site, url);
         let mut context = context(false);
-        let rendered = run(&mut context, &page.client_js, DRIVER);
+        let rendered = run(&mut context, &program(&site, url), DRIVER);
         assert!(
             rendered.contains(needle),
             "{url} did not render `{needle}`:\n{rendered}"
@@ -349,7 +410,7 @@ walk($host).filter((n) => n.tagName === 'a').map((n) => n.attributes.href).join(
     let mut checked = 0;
     for page in &site.pages {
         let mut context = context(false);
-        let hrefs = run(&mut context, &page.client_js, DRIVER);
+        let hrefs = run(&mut context, &program(&site, &page.url), DRIVER);
         for href in hrefs.split_whitespace() {
             checked += 1;
             assert!(
@@ -645,5 +706,183 @@ fn a_routed_manifest_names_no_entry_and_an_unrouted_one_does() {
         page.manifest_json.contains(r#""entry":"client.js""#),
         "an unrouted build writes `client.js` and should still say so:\n{}",
         page.manifest_json
+    );
+}
+
+/// **The program's own code, written once.**
+///
+/// §14A's argument is bundle size, and the per-page split won half of it:
+/// the runtime is shared and the program was not. Every route of a site
+/// whose shell can reach a definition carries that definition, so the
+/// portfolio shipped the same 427 KB thirty-three times and its 404 page
+/// was 453 KB of JavaScript.
+#[test]
+fn a_definition_two_pages_reach_is_emitted_once_and_imported() {
+    let site = site_example();
+    let chunk = site
+        .program_chunk
+        .as_ref()
+        .expect("a site whose pages share a definition emits a chunk");
+
+    let shared: Vec<&PageBundle> = site
+        .pages
+        .iter()
+        .filter(|page| page.client_js.contains(&chunk.name))
+        .collect();
+    assert!(
+        shared.len() > 1,
+        "a chunk exists because more than one page reads from it"
+    );
+    for page in &shared {
+        assert!(
+            page.client_js.contains(&format!("from './{}'", chunk.name)),
+            "a page names the chunk beside itself, not at the site root — \
+             both sit in `pages/`:\n{}",
+            page.client_js
+                .lines()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    // The definition is in the chunk and in none of the pages that read
+    // it. Emitting it in both would be the duplication this removes,
+    // wearing an import.
+    let example = "function titleOf(";
+    assert!(
+        chunk.client_js.contains(example),
+        "the chunk holds what the pages share:\n{}",
+        chunk.client_js
+    );
+    for page in &shared {
+        assert!(
+            !page.client_js.contains(example),
+            "and a page that imports it does not also carry it:\n{}",
+            page.slug
+        );
+    }
+}
+
+/// **What is imported is copied — the chunk included.**
+///
+/// `site.runtime` is a union over the documents and it is what every
+/// writer of a bundle copies. Moving a definition into the chunk moves
+/// its runtime import with it, so a module the chunk reaches and no page
+/// reaches any more would be copied for nobody: the chunk would import a
+/// file that is not there, and every page importing the chunk would fail
+/// to load with it while `zdc build` reported nothing.
+///
+/// Asked of every emitted module rather than of the chunk alone. The
+/// chunk of *this* program imports no runtime — it holds two pure text
+/// functions — so a check that looked only there would pass without
+/// looking at anything, which is what the first version of this test did
+/// until its own guard said so. The pages always import runtime, so the
+/// walk has something to walk, and the chunk is included wherever it has
+/// imports of its own.
+#[test]
+fn the_runtime_every_emitted_module_imports_is_in_the_set_the_writer_copies() {
+    let site = site_example();
+    let chunk = site
+        .program_chunk
+        .as_ref()
+        .map(|chunk| chunk.client_js.as_str());
+    let modules = site
+        .pages
+        .iter()
+        .map(|page| page.client_js.as_str())
+        .chain(chunk);
+
+    let mut checked = 0;
+    for source in modules {
+        for line in source.lines() {
+            let Some(rest) = line.strip_prefix("import ") else {
+                continue;
+            };
+            let Some(from) = rest.split(" from ").nth(1) else {
+                continue;
+            };
+            let specifier = from.trim().trim_matches(|c| c == '\'' || c == ';');
+            let Some(module) = specifier.strip_prefix("../runtime/") else {
+                continue;
+            };
+            checked += 1;
+            assert!(
+                site.runtime.iter().any(|named| named.ends_with(module)),
+                "`{module}` is imported and nothing would copy it: {:?}",
+                site.runtime
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "no emitted module imports the runtime, so this checked nothing"
+    );
+}
+
+/// **A site whose pages share nothing gets no chunk**, and no page names
+/// one.
+///
+/// The saving is `(copies - 1) x size`, so at one copy there is none: a
+/// chunk holding what a single page reaches would move that page's own
+/// code into a second file and a second request, for nothing. Every
+/// other test here is of a program that *does* share, so this is the
+/// branch none of them reach — and an empty file emitted anyway would be
+/// a 404 waiting for the first page that imported it.
+#[test]
+fn a_site_with_nothing_in_common_emits_no_chunk() {
+    // **Two things this program had to be talked out of.** It gave two
+    // functions returning literals first, and the emitter folded both
+    // into their templates — so neither page reached a definition, the
+    // chunk was empty whatever the threshold was, and the test passed
+    // with the threshold set to one. A function of state cannot be
+    // folded, so there is something to apportion.
+    //
+    // Then both functions read one `count`, which *is* a definition two
+    // pages reach — so the program shared something after all and the
+    // chunk was rightly emitted. A page apiece, and now nothing is.
+    let site = build_source(
+        "route Site\n    \
+         Home  is \"/\"\n    \
+         Other is \"/other\"\n\n\
+         state page is client Option of Site starting address\n\
+         state homeCount is client Whole starting 1\n\
+         state otherCount is client Whole starting 2\n\n\
+         function homeSays of n\n    give \"home \" + (text of (n + 1))\n\n\
+         function otherSays of n\n    give \"other \" + (text of (n + 2))\n\n\
+         view\n    when page\n        None\n            Text \"not found\"\n        \
+         Some with here\n            when here\n                \
+         Home\n                    Column\n                        \
+         Text (homeSays of homeCount)\n                \
+         Other\n                    Column\n                        \
+         Text (otherSays of otherCount)\n",
+    );
+
+    assert!(site.pages.len() > 1, "this program is routed");
+    assert!(
+        site.program_chunk.is_none(),
+        "nothing is reached by two pages, so there is nothing to share"
+    );
+    for page in &site.pages {
+        assert!(
+            !page.client_js.contains("program."),
+            "and no page names a file that was not written:\n{}",
+            page.client_js
+                .lines()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    // Each page still carries its own, which is what makes the absence a
+    // saving rather than a loss.
+    let home = &page(&site, "/").client_js;
+    assert!(
+        home.contains("homeSays"),
+        "the page carries its own:\n{home}"
+    );
+    assert!(
+        !home.contains("otherSays"),
+        "and not the other page's:\n{home}"
     );
 }
